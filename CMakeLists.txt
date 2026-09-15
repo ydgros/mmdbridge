@@ -1,4 +1,4 @@
-CMAKE_MINIMUM_REQUIRED(VERSION 2.8)
+CMAKE_MINIMUM_REQUIRED(VERSION 2.8.12...5.10.0)
 PROJECT(mmdbridge) # .sln
 
 # for UTF8 source codes
@@ -16,9 +16,9 @@ SET(CMAKE_CXX_FLAGS_DEBUG
 # path settings
 #FIND_PACKAGE(PythonLibs REQUIRED)
 SET(PYTHON_INCLUDE_DIRS
-    ${CMAKE_INSTALL_PREFIX}/include/python3.10)
+    ${CMAKE_INSTALL_PREFIX}/include/python3.12)
 SET(PYTHON_LIBRARIES
-    ${CMAKE_INSTALL_PREFIX}/lib/python310.lib)
+    ${CMAKE_INSTALL_PREFIX}/lib/python312.lib)
 
 #FIND_PACKAGE(pybind11 REQUIRED)
 SET(pybind11_INCLUDE_DIRS
@@ -46,9 +46,8 @@ SET(ALEMBIC_INCLUDE_DIRS
 SET(ALEMBIC_LIBRARIES
     ${CMAKE_INSTALL_PREFIX}/lib/Alembic.lib
     ${CMAKE_INSTALL_PREFIX}/lib/hdf5.lib
-    ${CMAKE_INSTALL_PREFIX}/lib/hdf5_hl.lib
-    ${CMAKE_INSTALL_PREFIX}/lib/Imath-3_1.lib
-    ${CMAKE_INSTALL_PREFIX}/lib/zlib.lib
+    ${CMAKE_INSTALL_PREFIX}/lib/Imath-3_2.lib
+    ${CMAKE_INSTALL_PREFIX}/lib/z.lib
     ${CMAKE_INSTALL_PREFIX}/lib/szip.lib)
 
 # projects
@@ -56,12 +55,11 @@ ADD_SUBDIRECTORY(src)
 
 # additional install files
 INSTALL(FILES 
-    ${CMAKE_INSTALL_PREFIX}/bin/python310.dll
+    ${CMAKE_INSTALL_PREFIX}/bin/python312.dll
     ${CMAKE_INSTALL_PREFIX}/bin/Alembic.dll
     ${CMAKE_INSTALL_PREFIX}/bin/hdf5.dll
-    ${CMAKE_INSTALL_PREFIX}/bin/hdf5_hl.dll
-    ${CMAKE_INSTALL_PREFIX}/bin/imath-3_1.dll
-    ${CMAKE_INSTALL_PREFIX}/bin/zlib1.dll
+    ${CMAKE_INSTALL_PREFIX}/bin/imath-3_2.dll
+    ${CMAKE_INSTALL_PREFIX}/bin/z.dll
     ${CMAKE_INSTALL_PREFIX}/bin/szip.dll
     DESTINATION ${MMD_DIR}
     )
