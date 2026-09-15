@@ -147,8 +147,9 @@ static void d3d_vector3_transform(
 namespace
 {
 	std::wstring pythonName; // スクリプト名
-	int script_call_setting = 2; // スクリプト呼び出し設定
+	int script_call_setting = 1; // スクリプト呼び出し設定（実行する）
 	std::map<int, int> exportedFrames;
+	HWND syncedRecWindow = NULL;
 
 	/// スクリプトのリロード.
 	bool relaod_python_script()
@@ -1171,7 +1172,71 @@ static HRESULT WINAPI endScene(IDirect3DDevice9 *device)
 
 HWND g_hWnd=NULL;	//ウィンドウハンドル
 HMENU g_hMenu=NULL;	//メニュー
+HMENU g_hPluginMenu=NULL;	//MMDBridge submenu
+UINT g_pluginMenuPosition=0;
 HWND g_hFrame = NULL; //フレーム数
+
+struct AviFrameControls
+{
+	HWND start;
+	HWND end;
+};
+
+static BOOL CALLBACK findAviFrameControls(HWND hWnd, LPARAM lParam)
+{
+	AviFrameControls* controls = reinterpret_cast<AviFrameControls*>(lParam);
+	char className[32] = {};
+	GetClassNameA(hWnd, className, sizeof(className));
+	if (_stricmp(className, "Edit") != 0)
+	{
+		return TRUE;
+	}
+
+	HWND label = GetWindow(hWnd, GW_HWNDPREV);
+	char labelText[128] = {};
+	if (!label || !GetWindowTextA(label, labelText, sizeof(labelText)))
+	{
+		return TRUE;
+	}
+	if (strstr(labelText, "開始") || strstr(labelText, "Start") || strstr(labelText, "start"))
+	{
+		controls->start = hWnd;
+	}
+	else if (strstr(labelText, "終了") || strstr(labelText, "End") || strstr(labelText, "end"))
+	{
+		controls->end = hWnd;
+	}
+	return TRUE;
+}
+
+static bool syncAviFrameRange(HWND recWindow)
+{
+	if (!recWindow || recWindow == syncedRecWindow)
+	{
+		return false;
+	}
+	AviFrameControls controls = {};
+	EnumChildWindows(recWindow, findAviFrameControls, reinterpret_cast<LPARAM>(&controls));
+	if (!controls.start || !controls.end)
+	{
+		return false;
+	}
+
+	char startText[32] = {};
+	char endText[32] = {};
+	GetWindowTextA(controls.start, startText, sizeof(startText));
+	GetWindowTextA(controls.end, endText, sizeof(endText));
+	const int startFrame = atoi(startText);
+	const int endFrame = atoi(endText);
+	if (startFrame < 0 || endFrame <= startFrame)
+	{
+		return false;
+	}
+	BridgeParameter::mutable_instance().start_frame = startFrame;
+	BridgeParameter::mutable_instance().end_frame = endFrame;
+	syncedRecWindow = recWindow;
+	return true;
+}
 
 
 static void GetFrame(HWND hWnd)
@@ -1255,6 +1320,8 @@ static void setMyMenu()
 		minfo.hSubMenu = hsubs;
 
 		InsertMenuItem(hmenu, count + 1, TRUE, &minfo);
+		g_pluginMenuPosition = static_cast<UINT>(count);
+		g_hPluginMenu = hsubs;
 		minfo.fMask = MIIM_ID | MIIM_TYPE;
 		minfo.dwTypeData = TEXT("プラグイン設定");
 		minfo.wID = 1020;
@@ -1276,6 +1343,7 @@ LONG_PTR originalWndProc  =NULL;
 INT_PTR CALLBACK DialogProc(HWND, UINT, WPARAM, LPARAM);
 HINSTANCE hInstance= NULL;
 HWND pluginDialog = NULL;
+static void removeMyMenu();
 
 static LRESULT CALLBACK overrideWndProc(HWND hWnd, UINT msg, WPARAM wp, LPARAM lp)
 {
@@ -1288,7 +1356,7 @@ static LRESULT CALLBACK overrideWndProc(HWND hWnd, UINT msg, WPARAM wp, LPARAM l
 			case 1020: // プラグイン設定
 				if(hInstance)
 				{
-					pluginDialog = hWnd;
+						pluginDialog = NULL;
 					::DialogBoxA(hInstance, "IDD_DIALOG1", NULL,  DialogProc);
 				}
 				break;
@@ -1296,17 +1364,29 @@ static LRESULT CALLBACK overrideWndProc(HWND hWnd, UINT msg, WPARAM wp, LPARAM l
 		}
 		break;
 		case WM_DESTROY:
-			::DestroyWindow(pluginDialog);
 			g_hWnd = NULL;
 			g_hFrame = NULL;
 			g_hMenu = NULL;
-			originalWndProc = NULL;
-
+		break;
+		case WM_CLOSE:
+			// Let MMD save its native window state without the plugin menu
+			// changing the non-client area.
+			removeMyMenu();
 		break;
 	}
 
 	// サブクラスで処理しなかったメッセージは、本来のウィンドウプロシージャに処理してもらう
-	return CallWindowProc( (WNDPROC)originalWndProc, hWnd, msg, wp, lp );
+	const LONG_PTR wndProc = originalWndProc;
+	if (msg == WM_NCDESTROY)
+	{
+		g_hWnd = NULL;
+		g_hFrame = NULL;
+		g_hMenu = NULL;
+		originalWndProc = NULL;
+	}
+	return wndProc
+		? CallWindowProc((WNDPROC)wndProc, hWnd, msg, wp, lp)
+		: DefWindowProc(hWnd, msg, wp, lp);
 }
 
 static INT_PTR CALLBACK DialogProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
@@ -1331,9 +1411,10 @@ static INT_PTR CALLBACK DialogProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lP
 				UINT index1 = SendMessage(hCombo1, CB_FINDSTRINGEXACT, -1, (LPARAM)parameter.python_script_name.c_str());
 				SendMessage(hCombo1, CB_SETCURSEL, index1, 0);
 				SendMessage(hCombo2, CB_SETCURSEL, script_call_setting - 1, 0);
+				syncAviFrameRange(FindWindowA("RecWindow", NULL));
 
-				::SetWindowTextA(hEdit1, to_string(parameter.start_frame).c_str());
-				::SetWindowTextA(hEdit2, to_string(parameter.end_frame).c_str());
+				::SetWindowTextA(hEdit1, to_string(BridgeParameter::instance().start_frame).c_str());
+				::SetWindowTextA(hEdit2, to_string(BridgeParameter::instance().end_frame).c_str());
 				::SetWindowTextA(hEdit5, to_string(parameter.export_fps).c_str());
 			}
 			return TRUE;
@@ -1397,12 +1478,48 @@ static INT_PTR CALLBACK DialogProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lP
 static void overrideGLWindow()
 {
 	EnumWindows(enumWindowsProc,0);
+	syncAviFrameRange(FindWindowA("RecWindow", NULL));
 	setMyMenu();
 	// サブクラス化
 	if(g_hWnd && !originalWndProc){
 		originalWndProc = GetWindowLongPtr(g_hWnd,GWLP_WNDPROC);
 		SetWindowLongPtr(g_hWnd,GWLP_WNDPROC,(_LONG_PTR)overrideWndProc);
 	}
+}
+
+static void removeMyMenu()
+{
+	if (!g_hWnd || !IsWindow(g_hWnd) || !g_hMenu || !g_hPluginMenu)
+	{
+		return;
+	}
+	WINDOWPLACEMENT placement;
+	placement.length = sizeof(WINDOWPLACEMENT);
+	const BOOL hasPlacement = GetWindowPlacement(g_hWnd, &placement);
+	DeleteMenu(g_hMenu, g_pluginMenuPosition, MF_BYPOSITION);
+	DestroyMenu(g_hPluginMenu);
+	SetMenu(g_hWnd, g_hMenu);
+	DrawMenuBar(g_hWnd);
+	if (hasPlacement)
+	{
+		SetWindowPlacement(g_hWnd, &placement);
+	}
+	g_hPluginMenu = NULL;
+}
+
+static void restoreGLWindow()
+{
+	removeMyMenu();
+	if (g_hWnd && originalWndProc && IsWindow(g_hWnd))
+	{
+		SetWindowLongPtr(g_hWnd, GWLP_WNDPROC, originalWndProc);
+	}
+	g_hWnd = NULL;
+	g_hFrame = NULL;
+	g_hMenu = NULL;
+	g_hPluginMenu = NULL;
+	originalWndProc = NULL;
+	pluginDialog = NULL;
 }
 
 
@@ -2414,6 +2531,7 @@ bool d3d9_initialize()
 	
 void d3d9_dispose() 
 {
+	restoreGLWindow();
 	renderData.dispose();
 	DisposePMX();
 	DisposeVMD();
