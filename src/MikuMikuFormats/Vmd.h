@@ -6,9 +6,31 @@
 #include <iostream>
 #include <fstream>
 #include <ostream>
+#include <algorithm>
+#include <cstring>
 
 namespace vmd
 {
+	template <size_t Size>
+	void WriteFixedString(std::ostream* stream, const std::string& value)
+	{
+		char buffer[Size] = {};
+		const size_t length = std::min(value.size(), Size);
+		if (length > 0)
+		{
+			std::memcpy(buffer, value.data(), length);
+		}
+		stream->write(buffer, Size);
+	}
+
+	inline std::string ReadFixedString(std::istream* stream, size_t size)
+	{
+		std::string buffer(size, '\0');
+		stream->read(&buffer[0], static_cast<std::streamsize>(size));
+		buffer.resize(std::strlen(buffer.c_str()));
+		return buffer;
+	}
+
 	/// ボーンフレーム
 	class VmdBoneFrame
 	{
@@ -26,9 +48,7 @@ namespace vmd
 
 		void Read(std::istream* stream)
 		{
-			char buffer[15];
-			stream->read((char*) buffer, sizeof(char)*15);
-			name = std::string(buffer);
+			name = ReadFixedString(stream, 15);
 			stream->read((char*) &frame, sizeof(int));
 			stream->read((char*) position, sizeof(float)*3);
 			stream->read((char*) orientation, sizeof(float)*4);
@@ -37,7 +57,7 @@ namespace vmd
 
 		void Write(std::ostream* stream)
 		{
-			stream->write((char*)name.c_str(), sizeof(char) * 15);
+			WriteFixedString<15>(stream, name);
 			stream->write((char*)&frame, sizeof(int));
 			stream->write((char*)position, sizeof(float) * 3);
 			stream->write((char*)orientation, sizeof(float) * 4);
@@ -58,16 +78,14 @@ namespace vmd
 
 		void Read(std::istream* stream)
 		{
-			char buffer[15];
-			stream->read((char*) &buffer, sizeof(char) * 15);
-			face_name = std::string(buffer);
+			face_name = ReadFixedString(stream, 15);
 			stream->read((char*) &frame, sizeof(int));
 			stream->read((char*) &weight, sizeof(float));
 		}
 
 		void Write(std::ostream* stream)
 		{
-			stream->write((char*)face_name.c_str(), sizeof(char) * 15);
+			WriteFixedString<15>(stream, face_name);
 			stream->write((char*)&frame, sizeof(int));
 			stream->write((char*)&weight, sizeof(float));
 		}
@@ -159,7 +177,6 @@ namespace vmd
 
 		void Read(std::istream *stream)
 		{
-			char buffer[20];
 			stream->read((char*) &frame, sizeof(int));
 			stream->read((char*) &display, sizeof(uint8_t));
 			int ik_count;
@@ -167,8 +184,7 @@ namespace vmd
 			ik_enable.resize(ik_count);
 			for (int i = 0; i < ik_count; i++)
 			{
-				stream->read(buffer, 20);
-				ik_enable[i].ik_name = std::string(buffer);
+				ik_enable[i].ik_name = ReadFixedString(stream, 20);
 				stream->read((char*) &ik_enable[i].enable, sizeof(uint8_t));
 			}
 		}
@@ -182,7 +198,7 @@ namespace vmd
 			for (int i = 0; i < ik_count; i++)
 			{
 				const VmdIkEnable& ik_enable = this->ik_enable.at(i);
-				stream->write(ik_enable.ik_name.c_str(), 20);
+				WriteFixedString<20>(stream, ik_enable.ik_name);
 				stream->write((char*)&ik_enable.enable, sizeof(uint8_t));
 			}
 		}
@@ -231,8 +247,7 @@ namespace vmd
 			result->version = std::atoi(buffer + 20);
 
 			// name
-			stream->read(buffer, 20);
-			result->model_name = std::string(buffer);
+			result->model_name = ReadFixedString(stream, 20);
 
 			// bone frames
 			int bone_frame_num;
@@ -296,6 +311,10 @@ namespace vmd
 		bool SaveToFile(const std::wstring& filename)
 		{
 			std::ofstream stream(filename.c_str(), std::ios::binary);
+			if (!stream)
+			{
+				return false;
+			}
 			auto result = SaveToStream(&stream);
 			stream.close();
 			return result;
@@ -303,6 +322,10 @@ namespace vmd
 
 		bool SaveToStream(std::ofstream *stream)
 		{
+			if (!stream || !*stream)
+			{
+				return false;
+			}
 			std::string magic = "Vocaloid Motion Data 0002\0";
 			magic.resize(30);
 
@@ -310,7 +333,7 @@ namespace vmd
 			stream->write(magic.c_str(), 30);
 
 			// name
-			stream->write(model_name.c_str(), 20);
+			WriteFixedString<20>(stream, model_name);
 
 			// bone frames
 			const int bone_frame_num = static_cast<int>(bone_frames.size());

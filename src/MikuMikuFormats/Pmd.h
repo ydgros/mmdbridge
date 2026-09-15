@@ -3,11 +3,21 @@
 #include <vector>
 #include <string>
 #include <memory>
+#include <algorithm>
+#include <cstring>
 #include <iostream>
 #include <fstream>
 
 namespace pmd
 {
+	inline std::string read_fixed_string(std::istream* stream, size_t size)
+	{
+		std::string value(size, '\0');
+		stream->read(&value[0], static_cast<std::streamsize>(size));
+		value.resize(strnlen(value.c_str(), size));
+		return value;
+	}
+
 	/// ヘッダ
 	class PmdHeader
 	{
@@ -23,21 +33,23 @@ namespace pmd
 
 		bool Read(std::ifstream* stream)
 		{
-			char buffer[256];
+			char buffer[256] = {};
 			stream->read(buffer, 20);
-			name = std::string(buffer);
+			name.assign(buffer, strnlen(buffer, 20));
+			std::fill(buffer, buffer + sizeof(buffer), '\0');
 			stream->read(buffer, 256);
-			comment = std::string(buffer);
+			comment.assign(buffer, strnlen(buffer, 256));
 			return true;
 		}
 
 		bool ReadExtension(std::ifstream* stream)
 		{
-			char buffer[256];
+			char buffer[256] = {};
 			stream->read(buffer, 20);
-			name_english = std::string(buffer);
+			name_english.assign(buffer, strnlen(buffer, 20));
+			std::fill(buffer, buffer + sizeof(buffer), '\0');
 			stream->read(buffer, 256);
-			comment_english = std::string(buffer);
+			comment_english.assign(buffer, strnlen(buffer, 256));
 			return true;
 		}
 	};
@@ -101,7 +113,6 @@ namespace pmd
 
 		bool Read(std::ifstream* stream)
 		{
-			char buffer[20];
 			stream->read((char*) &diffuse, sizeof(float) * 4);
 			stream->read((char*) &power, sizeof(float));
 			stream->read((char*) &specular, sizeof(float) * 3);
@@ -109,17 +120,16 @@ namespace pmd
 			stream->read((char*) &toon_index, sizeof(uint8_t));
 			stream->read((char*) &edge_flag, sizeof(uint8_t));
 			stream->read((char*) &index_count, sizeof(uint32_t));
-			stream->read((char*) &buffer, sizeof(char) * 20);
-			char* pstar = strchr(buffer, '*');
-			if (NULL == pstar)
+			const std::string texture = read_fixed_string(stream, 20);
+			const std::string::size_type pstar = texture.find('*');
+			if (pstar == std::string::npos)
 			{
-				texture_filename = std::string(buffer);
+				texture_filename = texture;
 				sphere_filename.clear();
 			}
 			else {
-				*pstar = NULL;
-				texture_filename = std::string(buffer);
-				sphere_filename = std::string(pstar+1);
+				texture_filename = texture.substr(0, pstar);
+				sphere_filename = texture.substr(pstar + 1);
 			}
 			return true;
 		}
@@ -160,9 +170,7 @@ namespace pmd
 
 		void Read(std::istream *stream)
 		{
-			char buffer[20];
-			stream->read(buffer, 20);
-			name = std::string(buffer);
+			name = read_fixed_string(stream, 20);
 			stream->read((char*) &parent_bone_index, sizeof(uint16_t));
 			stream->read((char*) &tail_pos_bone_index, sizeof(uint16_t));
 			stream->read((char*) &bone_type, sizeof(uint8_t));
@@ -172,9 +180,7 @@ namespace pmd
 
 		void ReadExpantion(std::istream *stream)
 		{
-			char buffer[20];
-			stream->read(buffer, 20);
-			name_english = std::string(buffer);
+			name_english = read_fixed_string(stream, 20);
 		}
 	};
 
@@ -241,9 +247,7 @@ namespace pmd
 
 		void Read(std::istream *stream)
 		{
-			char buffer[20];
-			stream->read(buffer, 20);
-			name = std::string(buffer);
+			name = read_fixed_string(stream, 20);
 			int vertex_count;
 			stream->read((char*) &vertex_count, sizeof(int));
 			stream->read((char*) &type, sizeof(uint8_t));
@@ -256,9 +260,7 @@ namespace pmd
 
 		void ReadExpantion(std::istream *stream)
 		{
-			char buffer[20];
-			stream->read(buffer, 20);
-			name_english = std::string(buffer);
+			name_english = read_fixed_string(stream, 20);
 		}
 	};
 
@@ -271,16 +273,12 @@ namespace pmd
 
 		void Read(std::istream *stream)
 		{
-			char buffer[50];
-			stream->read(buffer, 50);
-			bone_disp_name = std::string(buffer);
+			bone_disp_name = read_fixed_string(stream, 50);
 			bone_disp_name_english.clear();
 		}
 		void ReadExpantion(std::istream *stream)
 		{
-			char buffer[50];
-			stream->read(buffer, 50);
-			bone_disp_name_english = std::string(buffer);
+			bone_disp_name_english = read_fixed_string(stream, 50);
 		}
 	};
 
@@ -354,9 +352,7 @@ namespace pmd
 
 		void Read(std::istream *stream)
 		{
-			char buffer[20];
-			stream->read(buffer, sizeof(char) * 20);
-			name = (std::string(buffer));
+			name = read_fixed_string(stream, 20);
 			stream->read((char*) &related_bone_index, sizeof(uint16_t));
 			stream->read((char*) &group_index, sizeof(uint8_t));
 			stream->read((char*) &mask, sizeof(uint16_t));
@@ -402,9 +398,7 @@ namespace pmd
 
 		void Read(std::istream *stream)
 		{
-			char buffer[20];
-			stream->read(buffer, 20);
-			name = std::string(buffer);
+			name = read_fixed_string(stream, 20);
 			stream->read((char *) &rigid_body_index_a, sizeof(uint32_t));
 			stream->read((char *) &rigid_body_index_b, sizeof(uint32_t));
 			stream->read((char *) position, sizeof(float) * 3);
@@ -454,7 +448,6 @@ namespace pmd
 		static std::unique_ptr<PmdModel> LoadFromStream(std::ifstream *stream)
 		{
 			auto result = std::make_unique<PmdModel>();
-			char buffer[100];
 
 			// magic
 			char magic[3];
@@ -590,8 +583,7 @@ namespace pmd
 				result->toon_filenames.resize(10);
 				for (uint32_t i = 0; i < 10; i++)
 				{
-					stream->read(buffer, 100);
-					result->toon_filenames[i] = std::string(buffer);
+					result->toon_filenames[i] = read_fixed_string(stream, 100);
 				}
 			}
 

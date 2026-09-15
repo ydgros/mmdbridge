@@ -26,7 +26,14 @@ namespace py = pybind11;
 #include "vmd.h"
 #include "pmx.h"
 #include "resource.h"
+#ifdef _MSC_VER
+#pragma warning(push)
+#pragma warning(disable: 4828)
+#endif
 #include "MMDExport.h"
+#ifdef _MSC_VER
+#pragma warning(pop)
+#endif
 #include "UMStringUtil.h"
 #include "UMPath.h"
 
@@ -2408,4 +2415,3 @@ BOOL APIENTRY DllMain(HINSTANCE hinst, DWORD reason, LPVOID)
 	}
 	return TRUE;
 }
-
