@@ -1,3 +1,8 @@
+//Optimized the UV of the ABC file
+//Supporting the import of ABC UVs in Blender versions 3.0 to 4.2
+//The new UVs have only been tested in Blender, Unity, and UE5(It is recommended to use VMD to import UE)
+//by:https://github.com/Uqbc9/mmdbridge
+//by:https://github.com/uimac/mmdbridge
 #ifdef WITH_ALEMBIC
 
 #include "d3d9.h"
