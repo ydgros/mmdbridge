@@ -234,14 +234,9 @@ static void init_file_data(FileDataForVMD& data)
 			{
 				data.ik_bone_map[i] = 1;
 			}
-		}
-
-		for (std::vector<pmd::PmdIk>::const_iterator it = data.pmd->iks.begin();
-			it != data.pmd->iks.end(); ++it)
-		{
-			if (it->ik_bone_index < bones.size())
+			if (bone.bone_type == pmd::BoneType::IkEffector)
 			{
-				data.ik_frame_bone_map[it->ik_bone_index] = 1;
+				data.ik_frame_bone_map[i] = 1;
 			}
 		}
 
@@ -370,6 +365,38 @@ static UMMat44d to_ummat(const D3DMATRIX& mat)
 		}
 	}
 	return ummat;
+}
+
+// convert a local transform into the position written to VMD
+static UMVec3f to_vmd_position(const UMMat44d& local,
+	const UMVec3f& initial_trans, const UMVec3f& initial_parent_trans)
+{
+	UMVec3f position;
+	position[0] = static_cast<float>(local[3][0] - (initial_trans[0] - initial_parent_trans[0]));
+	position[1] = static_cast<float>(local[3][1] - (initial_trans[1] - initial_parent_trans[1]));
+	position[2] = static_cast<float>(local[3][2] - (initial_trans[2] - initial_parent_trans[2]));
+	return position;
+}
+
+// angle (radians) between two quaternions
+static double quat_angle(const UMVec4d a, const UMVec4d b)
+{
+	double dot = a[0] * b[0] + a[1] * b[1] + a[2] * b[2] + a[3] * b[3];
+	if (dot < 0.0) { dot = -dot; }
+	if (dot > 1.0) { dot = 1.0; }
+	return 2.0 * acos(dot);
+}
+
+// transposed rotation (inverse rotation) of a matrix
+static UMMat44d rotation_transposed(const UMMat44d& mat)
+{
+	UMMat44d dst;
+	for (int n = 0; n < 3; ++n) {
+		for (int m = 0; m < 3; ++m) {
+			dst[n][m] = mat[m][n];
+		}
+	}
+	return dst;
 }
 
 // from imath
@@ -514,15 +541,11 @@ static bool execute_vmd_export(int currentframe)
 			}
 
 			// export mode
-			const bool is_ik_controller =
-				file_data.ik_frame_bone_map.find(k) != file_data.ik_frame_bone_map.end();
-			const bool is_ik_link =
-				file_data.ik_bone_map.find(k) != file_data.ik_bone_map.end();
 			if (file_data.physics_bone_map.find(k) == file_data.physics_bone_map.end()) {
 				if (archive.export_mode == 0)
 				{
 					// physics + ik + fuyo
-					if (!is_ik_controller && !is_ik_link) {
+					if (file_data.ik_bone_map.find(k) == file_data.ik_bone_map.end()) {
 						if (file_data.fuyo_bone_map.find(k) == file_data.fuyo_bone_map.end()) {
 							continue;
 						}
@@ -535,16 +558,8 @@ static bool execute_vmd_export(int currentframe)
 				}
 				else
 				{
-					// Mode 3 keeps every visible bone so solved physics,
-					// clothing collision, and IK results are baked into VMD.
+					// all (buggy)
 				}
-			}
-			// IK-enabled exports must not contain solved link rotations: MMD and
-			// Blender would apply those rotations and solve the same IK chain again.
-			// The physics-bake mode is the exception because it disables IK below.
-			if (archive.export_mode != 3 && is_ik_link && !is_ik_controller)
-			{
-				continue;
 			}
 
 			// get initial world position
@@ -571,7 +586,6 @@ static bool execute_vmd_export(int currentframe)
 
 			UMMat44d world = to_ummat(ExpGetPmdBoneWorldMat(i, k));
 			UMMat44d local = world;
-			UMVec3d parent_offset;
 			std::map<int, int>::const_iterator parent_it = file_data.parent_index_map.find(k);
 			if (parent_it == file_data.parent_index_map.end())
 			{
@@ -609,18 +623,14 @@ static bool execute_vmd_export(int currentframe)
 				UMMat44d parent_world = to_ummat(ExpGetPmdBoneWorldMat(i, parent_index));
 				local = world * parent_world.inverted();
 			}
-			// VMD bone translation is relative to the parent bone's rest
-			// position, matching the parent-relative rotation above.
-			local[3][0] -= initial_trans[0] - initial_parent_trans[0];
-			local[3][1] -= initial_trans[1] - initial_parent_trans[1];
-			local[3][2] -= initial_trans[2] - initial_parent_trans[2];
+			const UMVec3f position = to_vmd_position(local, initial_trans, initial_parent_trans);
 			
 			vmd::VmdBoneFrame bone_frame;
 			bone_frame.frame = currentframe;
 			bone_frame.name = ExpGetPmdBoneName(i, k);
-			bone_frame.position[0] = static_cast<float>(local[3][0]);
-			bone_frame.position[1] = static_cast<float>(local[3][1]);
-			bone_frame.position[2] = static_cast<float>(local[3][2]);
+			bone_frame.position[0] = position[0];
+			bone_frame.position[1] = position[1];
+			bone_frame.position[2] = position[2];
 			local[3][0] = local[3][1] = local[3][2] = 0.0;
 			UMVec4d quat = extractQuat(local);
 			bone_frame.orientation[0] = static_cast<float>(quat[0]);
@@ -642,7 +652,7 @@ static bool execute_vmd_export(int currentframe)
 			if (file_data.pmd)
 			{
 				pmd::PmdBone& bone = file_data.pmd->bones[k];
-				if (bone.bone_type == pmd::BoneType::Rotation)
+				if (!is_physics_bone && bone.bone_type == pmd::BoneType::Rotation)
 				{
 					bone_frame.position[0] = 0.0f;
 					bone_frame.position[1] = 0.0f;
@@ -652,41 +662,96 @@ static bool execute_vmd_export(int currentframe)
 			else if (file_data.pmx)
 			{
 				pmx::PmxBone& bone = file_data.pmx->bones[k];
-				if (!(bone.bone_flag & 0x0004))
+				if (!is_physics_bone && !(bone.bone_flag & 0x0004))
 				{
 					bone_frame.position[0] = 0.0f;
 					bone_frame.position[1] = 0.0f;
 					bone_frame.position[2] = 0.0f;
 				}
-				if (!(bone.bone_flag & 0x0002))
+				if (!is_physics_bone && !(bone.bone_flag & 0x0002))
 				{
 					bone_frame.orientation[0] = 0.0f;
 					bone_frame.orientation[1] = 0.0f;
 					bone_frame.orientation[2] = 0.0f;
 					bone_frame.orientation[3] = 1.0f;
 				}
-				// expect for fuyo
-				if (file_data.fuyo_target_map.find(k) != file_data.fuyo_target_map.end()) {
-					bone_frame.position[0] = 0.0f;
-					bone_frame.position[1] = 0.0f;
-					bone_frame.position[2] = 0.0f;
-					bone_frame.orientation[0] = 0.0f;
-					bone_frame.orientation[1] = 0.0f;
-					bone_frame.orientation[2] = 0.0f;
-					bone_frame.orientation[3] = 1.0f;
+				// A grant parent (grant source) is referenced by the bone receiving the
+				// grant, so its value must be written out as is without dropping it here.
+				// When a bone moves only by the grant, writing the value of the grant
+				// source as is would make MMD apply the grant twice on import. In that
+				// case (the live value matches the value of the grant source) write the
+				// value without the grant (no rotation / no offset) and let the grant on
+				// the MMD side reproduce the same pose.
+				if (!is_physics_bone && bone.grant_weight >= 0.999f &&
+					(bone.bone_flag & (0x0100 | 0x0200)))
+				{
+					const int grant_index = bone.grant_parent_index;
+					if (grant_index != k && grant_index >= 0 && grant_index < bone_num &&
+						grant_index < static_cast<int>(file_data.pmx->bones.size()) &&
+						file_data.parent_index_map.find(grant_index) != file_data.parent_index_map.end())
+					{
+						int grant_parent_index = file_data.parent_index_map[grant_index];
+						if (grant_parent_index < 0 || grant_parent_index >= bone_num)
+						{
+							grant_parent_index = 0xFFFF;
+						}
+						
+						// local transform of the grant source
+						const UMMat44d grant_world = to_ummat(ExpGetPmdBoneWorldMat(i, grant_index));
+						UMMat44d grant_local = grant_world;
+						if (grant_parent_index != 0xFFFF)
+						{
+							grant_local = grant_world * to_ummat(ExpGetPmdBoneWorldMat(i, grant_parent_index)).inverted();
+						}
+						// local transform when this bone moves only by the grant
+						// (the grant source transform seen from this bone's rest position)
+						UMMat44d grant_matrix;
+						grant_matrix[3][0] = initial_trans[0] - initial_parent_trans[0];
+						grant_matrix[3][1] = initial_trans[1] - initial_parent_trans[1];
+						grant_matrix[3][2] = initial_trans[2] - initial_parent_trans[2];
+						grant_matrix = grant_matrix * grant_local;
+						
+						if ((bone.bone_flag & 0x0100) && (bone.bone_flag & 0x0002))
+						{
+							const UMVec4d grant_quat = extractQuat(grant_local);
+							const UMVec4d bone_quat(bone_frame.orientation[0], bone_frame.orientation[1],
+								bone_frame.orientation[2], bone_frame.orientation[3]);
+							if (quat_angle(bone_quat, grant_quat) <= 0.02)
+							{
+								// moving only by the rotation grant means no rotation
+								bone_frame.orientation[0] = 0.0f;
+								bone_frame.orientation[1] = 0.0f;
+								bone_frame.orientation[2] = 0.0f;
+								bone_frame.orientation[3] = 1.0f;
+							}
+							else
+							{
+								// cancel the granted rotation if this bone has its own
+								UMMat44d own_rot = local * rotation_transposed(grant_local);
+								own_rot[3][0] = own_rot[3][1] = own_rot[3][2] = 0.0;
+								const UMVec4d own_quat = extractQuat(own_rot);
+								bone_frame.orientation[0] = static_cast<float>(own_quat[0]);
+								bone_frame.orientation[1] = static_cast<float>(own_quat[1]);
+								bone_frame.orientation[2] = static_cast<float>(own_quat[2]);
+								bone_frame.orientation[3] = static_cast<float>(own_quat[3]);
+							}
+						}
+						if ((bone.bone_flag & 0x0200) && (bone.bone_flag & 0x0004))
+						{
+							// moving only by the position grant means no offset
+							const UMVec3f grant_position = to_vmd_position(grant_matrix, initial_trans, initial_parent_trans);
+							if (fabs(bone_frame.position[0] - grant_position[0]) <= 0.005f &&
+								fabs(bone_frame.position[1] - grant_position[1]) <= 0.005f &&
+								fabs(bone_frame.position[2] - grant_position[2]) <= 0.005f)
+							{
+								bone_frame.position[0] = 0.0f;
+								bone_frame.position[1] = 0.0f;
+								bone_frame.position[2] = 0.0f;
+							}
+						}
+					}
 				}
 
-			}
-			// With IK disabled, neither IK controllers nor their links use
-			// translation to solve the chain. Keep their rest-space length and
-			// bake only the solved rotations, otherwise the foot can stretch.
-			if (archive.export_mode == 3 &&
-				(is_ik_link || is_ik_controller) &&
-				!is_physics_bone)
-			{
-				bone_frame.position[0] = 0.0f;
-				bone_frame.position[1] = 0.0f;
-				bone_frame.position[2] = 0.0f;
 			}
 			file_data.vmd->bone_frames.push_back(bone_frame);
 		}
@@ -695,8 +760,7 @@ static bool execute_vmd_export(int currentframe)
 		if (currentframe == parameter.start_frame)
 		{
 			vmd::VmdIkFrame ik_frame;
-			// VMD IK state must be initialized before the first baked motion frame.
-			ik_frame.frame = 0;
+			ik_frame.frame = currentframe;
 			ik_frame.display = true;
 			for (std::map<int, int>::iterator it = file_data.ik_frame_bone_map.begin();
 				it != file_data.ik_frame_bone_map.end();
@@ -706,9 +770,7 @@ static bool execute_vmd_export(int currentframe)
 				{
 					vmd::VmdIkEnable ik_enable;
 					ik_enable.ik_name = file_data.bone_name_map[it->first];
-					// Physics-bake exports already contain the solved IK chain, so the
-					// imported motion must disable MMD's IK solver.
-					ik_enable.enable = archive.export_mode != 3;
+					ik_enable.enable = false;
 					ik_frame.ik_enable.push_back(ik_enable);
 				}
 			}
