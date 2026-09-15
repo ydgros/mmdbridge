@@ -1232,8 +1232,19 @@ static void setMyMenu()
 	if (g_hMenu) return;
 	if (g_hWnd)
 	{
+		WINDOWPLACEMENT placement;
+		placement.length = sizeof(WINDOWPLACEMENT);
+		const BOOL hasPlacement = GetWindowPlacement(g_hWnd, &placement);
 		HMENU hmenu = GetMenu(g_hWnd);
+		if (!hmenu)
+		{
+			return;
+		}
 		HMENU hsubs = CreatePopupMenu();
+		if (!hsubs)
+		{
+			return;
+		}
 		int count = GetMenuItemCount(hmenu);
 		
 		MENUITEMINFO minfo;
@@ -1251,6 +1262,11 @@ static void setMyMenu()
 
 
 		SetMenu(g_hWnd, hmenu);
+		DrawMenuBar(g_hWnd);
+		if (hasPlacement)
+		{
+			SetWindowPlacement(g_hWnd, &placement);
+		}
 		g_hMenu = hmenu;
 	}
 }
@@ -1281,6 +1297,10 @@ static LRESULT CALLBACK overrideWndProc(HWND hWnd, UINT msg, WPARAM wp, LPARAM l
 		break;
 		case WM_DESTROY:
 			::DestroyWindow(pluginDialog);
+			g_hWnd = NULL;
+			g_hFrame = NULL;
+			g_hMenu = NULL;
+			originalWndProc = NULL;
 
 		break;
 	}
