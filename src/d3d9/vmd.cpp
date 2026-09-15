@@ -234,9 +234,14 @@ static void init_file_data(FileDataForVMD& data)
 			{
 				data.ik_bone_map[i] = 1;
 			}
-			if (bone.bone_type == pmd::BoneType::IkEffector)
+		}
+
+		for (std::vector<pmd::PmdIk>::const_iterator it = data.pmd->iks.begin();
+			it != data.pmd->iks.end(); ++it)
+		{
+			if (it->ik_bone_index < bones.size())
 			{
-				data.ik_frame_bone_map[i] = 1;
+				data.ik_frame_bone_map[it->ik_bone_index] = 1;
 			}
 		}
 
@@ -666,7 +671,8 @@ static bool execute_vmd_export(int currentframe)
 		if (currentframe == parameter.start_frame)
 		{
 			vmd::VmdIkFrame ik_frame;
-			ik_frame.frame = currentframe;
+			// VMD IK state must be initialized before the first baked motion frame.
+			ik_frame.frame = 0;
 			ik_frame.display = true;
 			for (std::map<int, int>::iterator it = file_data.ik_frame_bone_map.begin();
 				it != file_data.ik_frame_bone_map.end();
@@ -676,7 +682,8 @@ static bool execute_vmd_export(int currentframe)
 				{
 					vmd::VmdIkEnable ik_enable;
 					ik_enable.ik_name = file_data.bone_name_map[it->first];
-					ik_enable.enable = false;
+					// The foot position is driven by the model IK target in MMD.
+					ik_enable.enable = true;
 					ik_frame.ik_enable.push_back(ik_enable);
 				}
 			}
