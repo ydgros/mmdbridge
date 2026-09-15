@@ -514,11 +514,15 @@ static bool execute_vmd_export(int currentframe)
 			}
 
 			// export mode
+			const bool is_ik_controller =
+				file_data.ik_frame_bone_map.find(k) != file_data.ik_frame_bone_map.end();
+			const bool is_ik_link =
+				file_data.ik_bone_map.find(k) != file_data.ik_bone_map.end();
 			if (file_data.physics_bone_map.find(k) == file_data.physics_bone_map.end()) {
 				if (archive.export_mode == 0)
 				{
 					// physics + ik + fuyo
-					if (file_data.ik_bone_map.find(k) == file_data.ik_bone_map.end()) {
+					if (!is_ik_controller && !is_ik_link) {
 						if (file_data.fuyo_bone_map.find(k) == file_data.fuyo_bone_map.end()) {
 							continue;
 						}
@@ -531,8 +535,14 @@ static bool execute_vmd_export(int currentframe)
 				}
 				else
 				{
-					// all (buggy)
+					// all, while keeping IK chains driven by their controllers
 				}
+			}
+			// In the physics-bake mode, keep the solved IK link rotations in the
+			// VMD and disable IK below so MMD does not solve the chain again.
+			if (archive.export_mode == 2 && is_ik_link && !is_ik_controller)
+			{
+				continue;
 			}
 
 			// get initial world position
@@ -560,14 +570,16 @@ static bool execute_vmd_export(int currentframe)
 			UMMat44d world = to_ummat(ExpGetPmdBoneWorldMat(i, k));
 			UMMat44d local = world;
 			UMVec3d parent_offset;
-
-			auto parent_it = file_data.parent_index_map.find(k);
+			std::map<int, int>::const_iterator parent_it = file_data.parent_index_map.find(k);
 			if (parent_it == file_data.parent_index_map.end())
 			{
 				continue;
 			}
 			int parent_index = parent_it->second;
-			UMVec3f initial_parent_trans(0.0f, 0.0f, 0.0f);
+			UMVec3f initial_parent_trans;
+			initial_parent_trans[0] = 0.0f;
+			initial_parent_trans[1] = 0.0f;
+			initial_parent_trans[2] = 0.0f;
 			if (parent_index != 0xFFFF)
 			{
 				if (parent_index < 0 || parent_index >= bone_num ||
@@ -594,7 +606,6 @@ static bool execute_vmd_export(int currentframe)
 			{
 				UMMat44d parent_world = to_ummat(ExpGetPmdBoneWorldMat(i, parent_index));
 				local = world * parent_world.inverted();
-				//local = parent_world.inverted() * world;
 			}
 			local[3][0] -= initial_trans[0] - initial_parent_trans[0];
 			local[3][1] -= initial_trans[1] - initial_parent_trans[1];
@@ -681,8 +692,8 @@ static bool execute_vmd_export(int currentframe)
 				{
 					vmd::VmdIkEnable ik_enable;
 					ik_enable.ik_name = file_data.bone_name_map[it->first];
-					// The foot position is driven by the model IK target in MMD.
-					ik_enable.enable = true;
+					// Physics-bake exports already contain the solved IK chain.
+					ik_enable.enable = archive.export_mode != 3;
 					ik_frame.ik_enable.push_back(ik_enable);
 				}
 			}
