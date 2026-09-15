@@ -621,7 +621,7 @@ static void export_alembic_xform_by_material_fix_vindex(AlembicArchive &archive,
 				}
 			}
 			Alembic::AbcGeom::OV2fGeomParam::Sample uvSample;
-			uvSample.setScope(Alembic::AbcGeom::kVertexScope );
+			uvSample.setScope(Alembic::AbcGeom::kFacevaryingScope);
 			uvSample.setVals(Alembic::AbcGeom::V2fArraySample( ( const Imath::V2f *) &uvListByMaterial.front(), uvListByMaterial.size()));
 			sample.setUVs(uvSample);
 		}
