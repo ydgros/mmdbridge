@@ -560,16 +560,14 @@ static bool execute_vmd_export(int currentframe)
 			UMMat44d world = to_ummat(ExpGetPmdBoneWorldMat(i, k));
 			UMMat44d local = world;
 			UMVec3d parent_offset;
-			std::map<int, int>::const_iterator parent_it = file_data.parent_index_map.find(k);
+
+			auto parent_it = file_data.parent_index_map.find(k);
 			if (parent_it == file_data.parent_index_map.end())
 			{
 				continue;
 			}
 			int parent_index = parent_it->second;
-			UMVec3f initial_parent_trans;
-			initial_parent_trans[0] = 0.0f;
-			initial_parent_trans[1] = 0.0f;
-			initial_parent_trans[2] = 0.0f;
+			UMVec3f initial_parent_trans(0.0f, 0.0f, 0.0f);
 			if (parent_index != 0xFFFF)
 			{
 				if (parent_index < 0 || parent_index >= bone_num ||
@@ -596,6 +594,7 @@ static bool execute_vmd_export(int currentframe)
 			{
 				UMMat44d parent_world = to_ummat(ExpGetPmdBoneWorldMat(i, parent_index));
 				local = world * parent_world.inverted();
+				//local = parent_world.inverted() * world;
 			}
 			local[3][0] -= initial_trans[0] - initial_parent_trans[0];
 			local[3][1] -= initial_trans[1] - initial_parent_trans[1];
