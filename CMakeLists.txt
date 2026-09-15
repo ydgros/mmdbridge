@@ -68,9 +68,9 @@ FILE(GLOB python_sciprts Release/Win32/*.py
 INSTALL(FILES ${python_sciprts}
     DESTINATION ${MMD_DIR}
     )
-INSTALL(FILES Release/x64/mmdbridge_vmd.py
-    DESTINATION ${MMD_DIR}
-    )    
+#INSTALL(FILES Release/x64/mmdbridge_vmd.py
+    #DESTINATION ${MMD_DIR}
+    #)
 
 FILE(INSTALL ${CMAKE_INSTALL_PREFIX}/tools/python3/Lib DESTINATION ${MMD_DIR})
 
@@ -79,4 +79,3 @@ INSTALL(DIRECTORY Release/Win32/alembic_assign_scripts
     )
 install(DIRECTORY 
     DESTINATION ${MMD_DIR}/out)
-
