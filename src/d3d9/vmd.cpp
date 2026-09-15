@@ -535,12 +535,14 @@ static bool execute_vmd_export(int currentframe)
 				}
 				else
 				{
-					// all, while keeping IK chains driven by their controllers
+					// Mode 3 keeps every visible bone so solved physics,
+					// clothing collision, and IK results are baked into VMD.
 				}
 			}
-			// In the physics-bake mode, keep the solved IK link rotations in the
-			// VMD and disable IK below so MMD does not solve the chain again.
-			if (archive.export_mode == 2 && is_ik_link && !is_ik_controller)
+			// IK-enabled exports must not contain solved link rotations: MMD and
+			// Blender would apply those rotations and solve the same IK chain again.
+			// The physics-bake mode is the exception because it disables IK below.
+			if (archive.export_mode != 3 && is_ik_link && !is_ik_controller)
 			{
 				continue;
 			}
@@ -607,6 +609,8 @@ static bool execute_vmd_export(int currentframe)
 				UMMat44d parent_world = to_ummat(ExpGetPmdBoneWorldMat(i, parent_index));
 				local = world * parent_world.inverted();
 			}
+			// VMD bone translation is relative to the parent bone's rest
+			// position, matching the parent-relative rotation above.
 			local[3][0] -= initial_trans[0] - initial_parent_trans[0];
 			local[3][1] -= initial_trans[1] - initial_parent_trans[1];
 			local[3][2] -= initial_trans[2] - initial_parent_trans[2];
@@ -638,7 +642,7 @@ static bool execute_vmd_export(int currentframe)
 			if (file_data.pmd)
 			{
 				pmd::PmdBone& bone = file_data.pmd->bones[k];
-				if (!is_physics_bone && bone.bone_type == pmd::BoneType::Rotation)
+				if (bone.bone_type == pmd::BoneType::Rotation)
 				{
 					bone_frame.position[0] = 0.0f;
 					bone_frame.position[1] = 0.0f;
@@ -648,13 +652,13 @@ static bool execute_vmd_export(int currentframe)
 			else if (file_data.pmx)
 			{
 				pmx::PmxBone& bone = file_data.pmx->bones[k];
-				if (!is_physics_bone && !(bone.bone_flag & 0x0004))
+				if (!(bone.bone_flag & 0x0004))
 				{
 					bone_frame.position[0] = 0.0f;
 					bone_frame.position[1] = 0.0f;
 					bone_frame.position[2] = 0.0f;
 				}
-				if (!is_physics_bone && !(bone.bone_flag & 0x0002))
+				if (!(bone.bone_flag & 0x0002))
 				{
 					bone_frame.orientation[0] = 0.0f;
 					bone_frame.orientation[1] = 0.0f;
@@ -662,8 +666,7 @@ static bool execute_vmd_export(int currentframe)
 					bone_frame.orientation[3] = 1.0f;
 				}
 				// expect for fuyo
-				if (!is_physics_bone &&
-					file_data.fuyo_target_map.find(k) != file_data.fuyo_target_map.end()) {
+				if (file_data.fuyo_target_map.find(k) != file_data.fuyo_target_map.end()) {
 					bone_frame.position[0] = 0.0f;
 					bone_frame.position[1] = 0.0f;
 					bone_frame.position[2] = 0.0f;
@@ -673,6 +676,17 @@ static bool execute_vmd_export(int currentframe)
 					bone_frame.orientation[3] = 1.0f;
 				}
 
+			}
+			// With IK disabled, neither IK controllers nor their links use
+			// translation to solve the chain. Keep their rest-space length and
+			// bake only the solved rotations, otherwise the foot can stretch.
+			if (archive.export_mode == 3 &&
+				(is_ik_link || is_ik_controller) &&
+				!is_physics_bone)
+			{
+				bone_frame.position[0] = 0.0f;
+				bone_frame.position[1] = 0.0f;
+				bone_frame.position[2] = 0.0f;
 			}
 			file_data.vmd->bone_frames.push_back(bone_frame);
 		}
@@ -692,7 +706,8 @@ static bool execute_vmd_export(int currentframe)
 				{
 					vmd::VmdIkEnable ik_enable;
 					ik_enable.ik_name = file_data.bone_name_map[it->first];
-					// Physics-bake exports already contain the solved IK chain.
+					// Physics-bake exports already contain the solved IK chain, so the
+					// imported motion must disable MMD's IK solver.
 					ik_enable.enable = archive.export_mode != 3;
 					ik_frame.ik_enable.push_back(ik_enable);
 				}
