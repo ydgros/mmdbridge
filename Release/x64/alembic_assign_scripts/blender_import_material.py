@@ -3,16 +3,28 @@
 #Original Name:blender_mmdbridge_import_30_to_42.py
 import bpy
 import os
-from bpy.props import StringProperty
+import re
+from bpy.props import StringProperty, FloatProperty, EnumProperty
 from bpy_extras.io_utils import ImportHelper
+
+# MMDBridge writes abc in millimeter-ish scale; 0.08 is the value that matches
+# mmd (blender import shrinks 0.08, blender export grows 12.5).
+DEFAULT_MODEL_SCALE = 0.08
+
+# mmd is 30 fps; 60 fps gives the same animation length with twice as many frames
+SCENE_FPS_ITEMS = [
+    ("30", "30 fps", "Frame rate of mmd"),
+    ("60", "60 fps", "Twice as many frames for the same animation length"),
+]
+DEFAULT_SCENE_FPS = "30"
 
 bl_info = {
     "name": "MMDBridge Alembic and Material Import",
     "author": "Kazuma Hatta",
-    "version": (1, 0),
+    "version": (1, 3),
     "blender": (3, 0, 0),
     "location": "File > Import > MMDBridge Alembic and Material (.abc, .mtl)",
-    "description": "Import Alembic files (.abc) and MMDBridge Materials (.mtl)",
+    "description": "Import Alembic files (.abc) and MMDBridge Materials (.mtl), with model scale and frame rate options",
     "category": "Import-Export",
 }
 
@@ -71,9 +83,9 @@ def import_mtl(path, result, relation):
                 current.trans = float(words[1])
                 current.diffuse[3] = current.trans
             elif "map_Kd" == words[0]:
-                current.textureMap = line[line.find(words[1]):line.find(".png")+4]
+                current.textureMap = line.split(None, 1)[1].strip().strip('"')
             elif "map_d" == words[0]:
-                current.alphaMap = line[line.find(words[1]):line.find(".png")+4]
+                current.alphaMap = line.split(None, 1)[1].strip().strip('"')
             elif "#" == words[0]:
                 if words[1] == "face_size":
                     current.faceSize = int(words[2])
@@ -90,18 +102,69 @@ def import_mtl(path, result, relation):
 
     return export_mode
 
-def match_mesh_and_material(mesh_name, mtl_name):
-    mesh_stripped = mesh_name.replace("xform_", "")
-    mtl_stripped = mtl_name.replace("mesh_", "")
-    return mesh_stripped == mtl_stripped
+def normalize_object_key(name):
+    # Blender appends ".001" to names that are already used in the file
+    name = re.sub(r"\.\d+$", "", name)
+    # "mesh_0_material_1" / "xform_0_material_1" -> "0_1", "mesh_0" -> "0"
+    for prefix in ("mesh_", "xform_"):
+        if name.startswith(prefix):
+            name = name[len(prefix):]
+            break
+    return name.replace("_material_", "_")
 
-def assign_material(base_path, obj, mesh, mtlmat, image_dict):
+
+def find_materials_for_object(obj, mtlDict):
+    # objects imported from an mmdbridge .abc are named "mesh_<buffer>_material_<material>"
+    # (export mode 0/2/3) or "mesh_<buffer>" (export mode 1, one mesh per vertex buffer)
+    names = []
+    if obj.data is not None:
+        names.append(obj.data.name)
+    names.append(obj.name)
+    parent = obj.parent
+    while parent is not None:
+        names.append(parent.name)
+        parent = parent.parent
+
+    for name in names:
+        key = normalize_object_key(name)
+        # export mode 0/2/3: one material per mesh
+        if "material_" + key in mtlDict:
+            return [mtlDict["material_" + key]]
+        # export mode 1: the mesh holds all materials of its vertex buffer
+        prefix = "material_" + key + "_"
+        material_names = [n for n in mtlDict if n.startswith(prefix)]
+        if material_names:
+            material_names.sort(key=lambda n: int(n.rsplit("_", 1)[1]))
+            return [mtlDict[n] for n in material_names]
+    return []
+
+
+def load_texture(base_path, file_name, image_dict):
+    if not file_name:
+        return None
+    texture_file_path = os.path.normpath(bpy.path.abspath(os.path.join(base_path, file_name)))
+    if texture_file_path in image_dict:
+        return image_dict[texture_file_path]
+    if not os.path.exists(texture_file_path):
+        print(f"Warning: texture not found: {texture_file_path}")
+        return None
+    try:
+        image = bpy.data.images.load(texture_file_path)
+    except RuntimeError as error:
+        print(f"Warning: unable to load texture {texture_file_path} ({error})")
+        return None
+    image_dict[texture_file_path] = image
+    return image
+
+
+def assign_material(base_path, mesh, mtlmat, image_dict):
     if mtlmat.name in bpy.data.materials:
         mat = bpy.data.materials[mtlmat.name]
     else:
         mat = bpy.data.materials.new(name=mtlmat.name)
 
-    mat.use_nodes = True
+    if not mat.use_nodes:
+        mat.use_nodes = True
 
     if mat.name not in mesh.materials:
         mesh.materials.append(mat)
@@ -133,24 +196,49 @@ def assign_material(base_path, obj, mesh, mtlmat, image_dict):
 
     bsdf.inputs['Roughness'].default_value = 1.0 - (mtlmat.power / 100)
 
-    if mtlmat.textureMap:
+    texture_image = load_texture(base_path, mtlmat.textureMap, image_dict)
+    if texture_image:
         tex_image_node = nodes.new('ShaderNodeTexImage')
         tex_image_node.location = (-300, 0)
-
-        texture_file_path = os.path.normpath(bpy.path.abspath(os.path.join(base_path, mtlmat.textureMap)))
-
-        if texture_file_path in image_dict:
-            tex_image_node.image = image_dict[texture_file_path]
-        elif os.path.exists(texture_file_path):
-            tex_image_node.image = bpy.data.images.load(texture_file_path)
-            image_dict[texture_file_path] = tex_image_node.image
-
-        if tex_image_node.image:
-            links.new(tex_image_node.outputs['Color'], bsdf.inputs['Base Color'])
+        tex_image_node.image = texture_image
+        links.new(tex_image_node.outputs['Color'], bsdf.inputs['Base Color'])
 
     if mtlmat.trans < 1.0:
         bsdf.inputs['Alpha'].default_value = mtlmat.trans
-        mat.blend_method = 'BLEND'
+
+        alpha_image = load_texture(base_path, mtlmat.alphaMap, image_dict)
+        if alpha_image and alpha_image.channels >= 4:
+            alpha_node = nodes.new('ShaderNodeTexImage')
+            alpha_node.location = (-300, -320)
+            alpha_node.image = alpha_image
+            links.new(alpha_node.outputs['Alpha'], bsdf.inputs['Alpha'])
+
+        # Blender 4.2 and above use surface_render_method, older versions use blend_method
+        if hasattr(mat, 'blend_method'):
+            mat.blend_method = 'BLEND'
+        if hasattr(mat, 'surface_render_method'):
+            mat.surface_render_method = 'BLENDED'
+
+    return mat
+
+
+def assign_materials_to_mesh(base_path, mesh, mtlmat_list, image_dict):
+    mesh.materials.clear()
+    for mtlmat in mtlmat_list:
+        assign_material(base_path, mesh, mtlmat, image_dict)
+
+    face_sizes = [mtlmat.faceSize for mtlmat in mtlmat_list]
+    if len(mtlmat_list) > 1 and all(size > 0 for size in face_sizes) \
+            and sum(face_sizes) <= len(mesh.polygons):
+        # export mode 1: the faces of all materials are stored in material order
+        face_offset = 0
+        for index, face_size in enumerate(face_sizes):
+            for polygon in mesh.polygons[face_offset:face_offset + face_size]:
+                polygon.material_index = index
+            face_offset += face_size
+    else:
+        for polygon in mesh.polygons:
+            polygon.material_index = 0
 
 def import_mmdbridge_material(filepath, context):
     image_dict = {}
@@ -160,32 +248,35 @@ def import_mmdbridge_material(filepath, context):
 
     base_path, file_name = os.path.split(filepath)
 
-    for key, mtlmat in mtlDict.items():
-        for obj in bpy.data.objects:
-            if obj.type == "MESH" and obj.data is not None:
-                if match_mesh_and_material(obj.name, key):
-                    assign_material(base_path, obj, obj.data, mtlmat, image_dict)
-                    print(f"Assigned material {mtlmat.name} to object {obj.name}")
+    for obj in bpy.data.objects:
+        if obj.type != "MESH" or obj.data is None:
+            continue
+        mtlmat_list = find_materials_for_object(obj, mtlDict)
+        if not mtlmat_list:
+            continue
+        assign_materials_to_mesh(base_path, obj.data, mtlmat_list, image_dict)
+        material_names = ", ".join(mtlmat.name for mtlmat in mtlmat_list)
+        print(f"Assigned material {material_names} to object {obj.name}")
 
-def import_alembic_and_mtl(filepath, context):
+def import_alembic_and_mtl(filepath, context, model_scale=DEFAULT_MODEL_SCALE, scene_fps=DEFAULT_SCENE_FPS):
+    # abc stores time in seconds and the importer converts it into frames with
+    # the scene frame rate, so the frame rate has to be set before importing
+    scene = bpy.context.scene
+    scene.render.fps = int(scene_fps)
+    scene.render.fps_base = 1.0
+
     # Create a new collection called "abc"
     abc_collection = bpy.data.collections.new("abc")
     bpy.context.scene.collection.children.link(abc_collection)
 
     # Import Alembic file (.abc)
-    bpy.ops.wm.alembic_import(filepath=filepath)
+    bpy.ops.wm.alembic_import(filepath=filepath, scale=model_scale)
 
     # Move all newly imported objects to the "abc" collection
     for obj in bpy.context.selected_objects:
         for collection in obj.users_collection:
             collection.objects.unlink(obj)
         abc_collection.objects.link(obj)
-
-    # Record original materials
-    original_materials = {}
-    for obj in abc_collection.objects:
-        if obj.type == 'MESH':
-            original_materials[obj.name] = [slot.material.name if slot.material else None for slot in obj.material_slots]
 
     # Clear all materials
     for obj in abc_collection.objects:
@@ -202,35 +293,28 @@ def import_alembic_and_mtl(filepath, context):
     else:
         print("Warning: .mtl file not found for Alembic file.")
 
-    # Update MTL file
-    update_mtl_file(mtl_file, original_materials, abc_collection.objects)
-
-def update_mtl_file(mtl_file, original_materials, objects):
-    with open(mtl_file, 'a') as f:
-        f.write("\n# Original material information\n")
-        for obj_name, materials in original_materials.items():
-            f.write(f"# Object: {obj_name}\n")
-            for i, mat_name in enumerate(materials):
-                if mat_name:
-                    f.write(f"# Material {i}: {mat_name}\n")
-
-        f.write("\n# New material assignments\n")
-        for obj in objects:
-            if obj.type == 'MESH':
-                f.write(f"# Object: {obj.name}\n")
-                for i, slot in enumerate(obj.material_slots):
-                    if slot.material:
-                        f.write(f"# Material {i}: {slot.material.name}\n")
-
 class MMDBridgeAlembicImportOperator(bpy.types.Operator, ImportHelper):
     bl_idname = "import_scene.mmdbridge_alembic_material"
     bl_label = "MMDBridge Alembic and Material Importer (.abc, .mtl)"
     
     filename_ext = ".abc"
     filter_glob: StringProperty(default="*.abc", options={'HIDDEN'})
+    model_scale: FloatProperty(
+        name="Scale",
+        description="Size of the imported model (1.0 = no scaling, 0.08 = mmd scale)",
+        default=DEFAULT_MODEL_SCALE,
+        min=0.000001,
+        soft_max=100.0,
+    )
+    scene_fps: EnumProperty(
+        name="FPS",
+        description="Frame rate of the scene; the abc time is converted into frames with this value",
+        items=SCENE_FPS_ITEMS,
+        default=DEFAULT_SCENE_FPS,
+    )
 
     def execute(self, context):
-        import_alembic_and_mtl(self.filepath, context)
+        import_alembic_and_mtl(self.filepath, context, self.model_scale, self.scene_fps)
         return {'FINISHED'}
 
 def menu_func_import(self, context):
