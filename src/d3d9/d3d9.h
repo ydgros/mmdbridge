@@ -1,17 +1,36 @@
 
 #pragma once
 
-#ifndef CINTERFACE
-#define CINTERFACE
-#endif //CINTERFACE
+//#ifndef CINTERFACE
+//#define CINTERFACE
+//#endif //CINTERFACE
 
 //#pragma comment(lib, "d3d9.lib")
+
+// d3dx9core.h provides C++ convenience methods for ID3DXFont (GetDesc/PreloadText)
+// that call GetDescW/PreloadTextW without passing 'this'. Under CINTERFACE the
+// interface is a struct of function pointers, so those bodies do not compile
+// (error C2198: too few arguments for call). Short-circuit the bodies with a
+// function-like macro; in CINTERFACE mode the declarations use "GetDescW)" so
+// they are unaffected.
+#ifdef CINTERFACE
+#define GetDescA(pDesc) (E_NOTIMPL)
+#define GetDescW(pDesc) (E_NOTIMPL)
+#define PreloadTextA(pString, Count) (E_NOTIMPL)
+#define PreloadTextW(pString, Count) (E_NOTIMPL)
+#endif //CINTERFACE
+
 #pragma warning(disable : 4819)
 #include <d3d9.h>
 #include <d3dx9shader.h>
 #include <d3d9types.h>
 #include <d3dx9tex.h>
 #pragma warning(default : 4819)
+
+#undef GetDescA
+#undef GetDescW
+#undef PreloadTextA
+#undef PreloadTextW
 
 #include <vector>
 #include <map>
