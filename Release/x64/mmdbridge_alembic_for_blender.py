@@ -3,9 +3,6 @@ from mmdbridge import *
 import mmdbridge_abc
 from mmdbridge_abc import *
 import os
-import math
-from math import *
-import time
 
 # settings
 export_normals = True
@@ -20,7 +17,10 @@ export_mode = 0
 
 
 
-def export_mtl(mtlpath, export_mode):
+def export_mtl(mtlpath, texture_export_dir, export_mode):
+	# cache of textures already written to disk (each one is encoded only once)
+	exported_textures = set()
+
 	if os.path.isfile(mtlpath):
 		os.remove(mtlpath)
 
@@ -51,9 +51,6 @@ def export_mtl(mtlpath, export_mode):
 				if len(texture) > 0:
 					texture = texture + ".png"
 
-			if material_name is "material_0_10":
-				messagebox(texture)
-
 			mtlfile.write("Ka "+str(ambient[0])+" "+str(ambient[1])+" "+str(ambient[2])+"\n")
 			if diffuse[0] < 0 or diffuse[1] < 0 or diffuse[2] < 0:
 				diffuse[0] = 1
@@ -74,38 +71,33 @@ def export_mtl(mtlpath, export_mode):
 			# lum = 1 no specular highlights, lum = 2 light normaly
 			mtlfile.write("lum 1\n")
 			if len(texture) > 0:
-				texname, ext = os.path.splitext(texture)
-				if '/' in texname:
-					texname = texname.split('/')[-1]
-				if '\\' in texname:
-					texname = texname.split('\\')[-1]
-				if (ext is not ".bmp") and (ext is not ".png") and (ext is not ".tif") and \
-						(ext is not ".BMP") and (ext is not ".PNG") and (ext is not ".TIF"):
-					export_path = get_base_path() + "out\\" + texname + ".png"
-					if export_texture(buf, mat, export_path):
-						mtlfile.write("map_Kd "+texname + ".png"+"\n")
-						if (diffuse[3] < 1):
-							mtlfile.write("map_d "+texname + ".png"+"\n")
-				else:
-					mtlfile.write("map_Kd "+texture+"\n")
+				# get_texture() returns a file name without extension, and a
+				# memory texture is only an identifier, so the texture is
+				# always written out as png and referenced from the mtl
+				texname = os.path.splitext(os.path.basename(texture))[0] + ".png"
+				if texname in exported_textures or export_texture(buf, mat, texture_export_dir + texname):
+					exported_textures.add(texname)
+					mtlfile.write("map_Kd "+texname+"\n")
 					if (diffuse[3] < 1):
-						mtlfile.write("map_d "+texture+"\n")
+						mtlfile.write("map_d "+texname+"\n")
+
+	mtlfile.close()
 
 
 outpath = get_base_path().replace("\\", "/") + "out/"
-mtlpath = outpath + "alembic_file" ".mtl"
-texture_export_dir = outpath
+mtlpath = outpath + "alembic_file.mtl"
+texture_export_dir = outpath.replace("/", "\\")
 start_frame = get_start_frame()
 end_frame = get_end_frame()
 
 framenumber = get_frame_number()
 if (framenumber == start_frame):
 	messagebox("alembic export started")
-	export_mtl(mtlpath, export_mode)
-	copy_textures(texture_export_dir.replace("/", "\\"))
+	export_mtl(mtlpath, texture_export_dir, export_mode)
+	copy_textures(texture_export_dir)
 	start_alembic_export("", export_mode, export_normals, export_uvs, is_use_euler_rotation_for_camera, is_use_ogawa)
 
-if (framenumber >= start_frame or framenumber <= end_frame):
+if (framenumber >= start_frame and framenumber <= end_frame):
 	execute_alembic_export(framenumber)
 
 if (framenumber == end_frame):
