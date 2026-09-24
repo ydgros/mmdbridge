@@ -57,6 +57,9 @@ public:
 	std::map<int, int> ik_frame_bone_map;
 	std::map<int, int> fuyo_bone_map;
 	std::map<int, int> fuyo_target_map;
+	// morph index -> last weight written to a face frame. A morph that is absent
+	// here has not been written yet, which is how the first frame is detected.
+	std::map<int, float> morph_last_weight;
 
 	FileDataForVMD(const FileDataForVMD& data) {
 		this->vmd = data.vmd;
@@ -69,6 +72,7 @@ public:
 		this->ik_frame_bone_map = data.ik_frame_bone_map;
 		this->fuyo_bone_map = data.fuyo_bone_map;
 		this->fuyo_target_map = data.fuyo_target_map;
+		this->morph_last_weight = data.morph_last_weight;
 	}
 };
 
@@ -88,17 +92,25 @@ public:
 
 	int export_mode;
 
+	// whether the facial expressions are baked as face frames
+	bool export_morph;
+
+	// largest morph count mmd reported, kept for the export summary
+	int reported_morph_count;
+
 	void end()
 	{
 		data_list.clear();
 		file_path_map.clear();
 		output_path.clear();
+		export_morph = true;
+		reported_morph_count = 0;
 	}
 
 	~VMDArchive() {
 	}
 private:
-	VMDArchive() {}
+	VMDArchive() : export_morph(true), reported_morph_count(0) {}
 };
 
 static umstring to_umpath(const char* path)
@@ -111,9 +123,46 @@ static umstring to_umpath(const char* path)
 	return umbase::UMStringUtil::wstring_to_utf16(wstr);
 }
 
+// Export summary, reported back to the script so that an export which produced no
+// facial expressions can be told apart from one where mmd reported no morphs.
+static std::string get_vmd_export_summary()
+{
+	const VMDArchive& archive = VMDArchive::instance();
+	int model_count = 0;
+	int bone_frame_count = 0;
+	int face_frame_count = 0;
+	int animated_morph_count = 0;
+	for (size_t i = 0; i < archive.data_list.size(); ++i)
+	{
+		const FileDataForVMD& data = archive.data_list[i];
+		if (!data.vmd)
+		{
+			continue;
+		}
+		++model_count;
+		bone_frame_count += static_cast<int>(data.vmd->bone_frames.size());
+		face_frame_count += static_cast<int>(data.vmd->face_frames.size());
+		animated_morph_count += static_cast<int>(data.morph_last_weight.size());
+	}
+	std::string result("vmd export: models=");
+	result += to_string(model_count);
+	result += " mmd_morphs=";
+	result += to_string(archive.reported_morph_count);
+	result += " animated_morphs=";
+	result += to_string(animated_morph_count);
+	result += " bone_frames=";
+	result += to_string(bone_frame_count);
+	result += " face_frames=";
+	result += to_string(face_frame_count);
+	result += " export_morph=";
+	result += archive.export_morph ? "1" : "0";
+	return result;
+}
+
 static bool start_vmd_export(
 	const std::string& directory_path,
-	int export_mode)
+	int export_mode,
+	bool export_morph)
 {
 	VMDArchive &archive = VMDArchive::instance();
 	BridgeParameter::mutable_instance().is_exporting_without_mesh = true;
@@ -123,6 +172,7 @@ static bool start_vmd_export(
 		return false;
 	}
 	archive.end();
+	archive.export_morph = export_morph;
 
 	std::string output_path(directory_path);
 	if (output_path.empty())
@@ -756,6 +806,52 @@ static bool execute_vmd_export(int currentframe)
 			file_data.vmd->bone_frames.push_back(bone_frame);
 		}
 
+		if (archive.export_morph)
+		{
+			// The names and values come from mmd's own morph list. Re-parsing the
+			// model file is not reliable enough here: a model whose morph section
+			// cannot be read back would otherwise silently export no expression at
+			// all, while its bones still export normally.
+			const int morph_num = ExpGetPmdMorphNum(i);
+			if (morph_num > archive.reported_morph_count)
+			{
+				archive.reported_morph_count = morph_num;
+			}
+			for (int k = 0; k < morph_num; ++k)
+			{
+				const char* morph_name = ExpGetPmdMorphName(i, k);
+				if (!morph_name || !*morph_name)
+				{
+					continue;
+				}
+				const float weight = ExpGetPmdMorphValue(i, k);
+
+				// A face frame is only written when the weight changes. Between two
+				// face frames mmd interpolates linearly, so a stretch of equal
+				// weights needs no frames, and a weight returning to zero must be
+				// written out or the expression would stay applied forever.
+				std::map<int, float>::iterator last_it = file_data.morph_last_weight.find(k);
+				if (last_it == file_data.morph_last_weight.end())
+				{
+					if (!(weight != 0.0f))
+					{
+						continue;
+					}
+				}
+				else if (fabs(weight - last_it->second) <= 0.0005f)
+				{
+					continue;
+				}
+				file_data.morph_last_weight[k] = weight;
+
+				vmd::VmdFaceFrame face_frame;
+				face_frame.face_name = morph_name;
+				face_frame.frame = currentframe;
+				face_frame.weight = weight;
+				file_data.vmd->face_frames.push_back(face_frame);
+			}
+		}
+
 
 		if (currentframe == parameter.start_frame)
 		{
@@ -784,9 +880,11 @@ static bool execute_vmd_export(int currentframe)
 // ---------------------------------------------------------------------------
 PYBIND11_PLUGIN(mmdbridge_vmd) {
 	py::module m("mmdbridge_vmd");
-	m.def("start_vmd_export", start_vmd_export);
+	m.def("start_vmd_export", start_vmd_export,
+		py::arg("directory_path"), py::arg("export_mode"), py::arg("export_morph") = true);
 	m.def("end_vmd_export", end_vmd_export);
 	m.def("execute_vmd_export", execute_vmd_export);
+	m.def("get_vmd_export_summary", get_vmd_export_summary);
 	return m.ptr();
 }
 
