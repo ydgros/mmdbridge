@@ -16,9 +16,9 @@ SET(CMAKE_CXX_FLAGS_DEBUG
 # path settings
 #FIND_PACKAGE(PythonLibs REQUIRED)
 SET(PYTHON_INCLUDE_DIRS
-    ${CMAKE_INSTALL_PREFIX}/include/python3.12)
+    ${CMAKE_INSTALL_PREFIX}/include/python3.14)
 SET(PYTHON_LIBRARIES
-    ${CMAKE_INSTALL_PREFIX}/lib/python312.lib)
+    ${CMAKE_INSTALL_PREFIX}/lib/python314.lib)
 
 #FIND_PACKAGE(pybind11 REQUIRED)
 SET(pybind11_INCLUDE_DIRS
@@ -55,7 +55,7 @@ ADD_SUBDIRECTORY(src)
 
 # additional install files
 INSTALL(FILES 
-    ${CMAKE_INSTALL_PREFIX}/bin/python312.dll
+    ${CMAKE_INSTALL_PREFIX}/bin/python314.dll
     ${CMAKE_INSTALL_PREFIX}/bin/Alembic.dll
     ${CMAKE_INSTALL_PREFIX}/bin/hdf5.dll
     ${CMAKE_INSTALL_PREFIX}/bin/imath-3_2.dll
