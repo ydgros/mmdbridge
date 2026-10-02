@@ -149,7 +149,7 @@ namespace
 	std::wstring pythonName; // スクリプト名
 	int script_call_setting = 1; // スクリプト呼び出し設定（実行する）
 	std::map<int, int> exportedFrames;
-	HWND syncedRecWindow = NULL;
+	int syncedEndFrame = 0;	//最後に反映した終了フレーム
 
 	/// スクリプトのリロード.
 	bool relaod_python_script()
@@ -1176,66 +1176,282 @@ HMENU g_hPluginMenu=NULL;	//MMDBridge submenu
 UINT g_pluginMenuPosition=0;
 HWND g_hFrame = NULL; //フレーム数
 
-struct AviFrameControls
-{
-	HWND start;
-	HWND end;
+//メインウィンドウのコントロールから、読み込まれているモーションの終了フレームを
+//探すための作業用。
+//MMD本体には開始/終了フレームの入力欄が無い(「録画ﾌﾚｰﾑ」はAVI出力設定ダイアログに
+//しかない)ため、フレーム範囲はタイムラインのスクロールバーとフレームスライダーの
+//範囲として保持される。AVI出力設定を開かなくても認識できるよう、こちらを読む。
+struct EndFrameSearch {
+	HWND reference;		//フレーム表示欄(距離の基準)
+	int scrollFrame;	//タイムライン(水平スクロールバー)から得た終了フレーム
+	int sliderFrame;	//フレームスライダー(TrackBar)から得た終了フレーム
+	int sliderDistance;
 };
 
-static BOOL CALLBACK findAviFrameControls(HWND hWnd, LPARAM lParam)
+static BOOL CALLBACK findEndFrameSourceProc(HWND hWnd, LPARAM lParam)
 {
-	AviFrameControls* controls = reinterpret_cast<AviFrameControls*>(lParam);
-	char className[32] = {};
-	GetClassNameA(hWnd, className, sizeof(className));
-	if (_stricmp(className, "Edit") != 0)
+	EndFrameSearch& search = *reinterpret_cast<EndFrameSearch*>(lParam);
+	char className[64] = {};
+	::GetClassNameA(hWnd, className, sizeof(className));
+
+	RECT rect = {};
+	::GetWindowRect(hWnd, &rect);
+
+	//水平スクロールバーがフレーム軸。範囲の最も広いものをタイムラインとみなす。
+	SCROLLINFO info = {};
+	info.cbSize = sizeof(info);
+	info.fMask = SIF_RANGE;
+	if (::_stricmp(className, "ScrollBar") == 0)
 	{
+		if ((rect.right - rect.left) > (rect.bottom - rect.top) &&
+			::GetScrollInfo(hWnd, SB_CTL, &info) && info.nMax > search.scrollFrame)
+		{
+			search.scrollFrame = info.nMax;
+		}
+	}
+	else if ((::GetWindowLongPtrA(hWnd, GWL_STYLE) & WS_HSCROLL) != 0)
+	{
+		//SCROLLBARクラスではなく、ウィンドウ自身がスクロールバーを持つ場合も対象にする
+		if (::GetScrollInfo(hWnd, SB_HORZ, &info) && info.nMax > search.scrollFrame)
+		{
+			search.scrollFrame = info.nMax;
+		}
+	}
+
+	if (::_stricmp(className, "msctls_trackbar32") == 0)
+	{
+		const int maxFrame = static_cast<int>(::SendMessage(hWnd, TBM_GETRANGEMAX, 0, 0));
+		if (maxFrame <= 0)
+		{
+			return TRUE;
+		}
+		RECT referenceRect = {};
+		if (search.reference && ::IsWindow(search.reference))
+		{
+			::GetWindowRect(search.reference, &referenceRect);
+			const int dx = (rect.left + rect.right) / 2 - (referenceRect.left + referenceRect.right) / 2;
+			const int dy = (rect.top + rect.bottom) / 2 - (referenceRect.top + referenceRect.bottom) / 2;
+			const int distance = dx * dx + dy * dy;
+			if (search.sliderDistance < 0 || distance < search.sliderDistance)
+			{
+				search.sliderDistance = distance;
+				search.sliderFrame = maxFrame;
+			}
+		}
+		else if (maxFrame > search.sliderFrame)
+		{
+			//基準になるフレーム表示欄が無い場合は範囲の広いものを採用する
+			search.sliderFrame = maxFrame;
+		}
 		return TRUE;
 	}
 
-	HWND label = GetWindow(hWnd, GW_HWNDPREV);
-	char labelText[128] = {};
-	if (!label || !GetWindowTextA(label, labelText, sizeof(labelText)))
-	{
-		return TRUE;
-	}
-	if (strstr(labelText, "開始") || strstr(labelText, "Start") || strstr(labelText, "start"))
-	{
-		controls->start = hWnd;
-	}
-	else if (strstr(labelText, "終了") || strstr(labelText, "End") || strstr(labelText, "end"))
-	{
-		controls->end = hWnd;
-	}
 	return TRUE;
 }
 
-static bool syncAviFrameRange(HWND recWindow)
+//読み込まれているモーションの終了フレームを自動認識する
+static bool detectMotionEndFrame(int& endFrame)
 {
-	if (!recWindow || recWindow == syncedRecWindow)
+	if (!g_hWnd || !IsWindow(g_hWnd))
 	{
 		return false;
 	}
-	AviFrameControls controls = {};
-	EnumChildWindows(recWindow, findAviFrameControls, reinterpret_cast<LPARAM>(&controls));
-	if (!controls.start || !controls.end)
-	{
-		return false;
-	}
+	EndFrameSearch search;
+	search.reference = g_hFrame;
+	search.scrollFrame = 0;
+	search.sliderFrame = 0;
+	search.sliderDistance = -1;
 
-	char startText[32] = {};
-	char endText[32] = {};
-	GetWindowTextA(controls.start, startText, sizeof(startText));
-	GetWindowTextA(controls.end, endText, sizeof(endText));
-	const int startFrame = atoi(startText);
-	const int endFrame = atoi(endText);
-	if (startFrame < 0 || endFrame <= startFrame)
+	//メインウィンドウ自身が持つ水平スクロールバー(タイムライン)も対象にする
+	SCROLLINFO windowInfo = {};
+	windowInfo.cbSize = sizeof(windowInfo);
+	windowInfo.fMask = SIF_RANGE;
+	if (::GetScrollInfo(g_hWnd, SB_HORZ, &windowInfo) && windowInfo.nMax > 0)
+	{
+		search.scrollFrame = windowInfo.nMax;
+	}
+	::EnumChildWindows(g_hWnd, findEndFrameSourceProc, reinterpret_cast<LPARAM>(&search));
+
+	//タイムラインのスクロールバーを優先し、無ければフレームスライダーを使う
+	const int detected = (search.scrollFrame > 0) ? search.scrollFrame : search.sliderFrame;
+	if (detected <= 0)
 	{
 		return false;
 	}
-	BridgeParameter::mutable_instance().start_frame = startFrame;
-	BridgeParameter::mutable_instance().end_frame = endFrame;
-	syncedRecWindow = recWindow;
+	endFrame = detected;
 	return true;
+}
+
+//終了フレーム数を自動認識してMMDBridgeに反映する
+//開始フレームは同期しない（MMDは0開始、Blenderは1開始のため）
+//認識元はMMD本体のメインウィンドウ（タイムラインのスクロールバー/フレームスライダー）
+//のみ。MMDのAVI出力設定ダイアログとは一切やり取りしない。
+static void syncEndFrame(bool forceUpdate)
+{
+	int endFrame = 0;
+	const bool valid = detectMotionEndFrame(endFrame);
+	if (!valid || (!forceUpdate && endFrame == syncedEndFrame))
+	{
+		return;
+	}
+	if (endFrame <= BridgeParameter::instance().start_frame)
+	{
+		return;
+	}
+	syncedEndFrame = endFrame;
+	BridgeParameter::mutable_instance().end_frame = endFrame;
+}
+
+
+// ---------------------------------------------------------------------------
+// ウィンドウ構成のダンプ（コントロールIDを特定するための診断出力）
+// MMDはコントロールIDを公開していないため、実際の構成をファイルに書き出す。
+// 出力先: <MMDフォルダ>\mmdbridge_window_dump.txt
+static const bool enableWindowDump = true;
+
+static void dumpWindowTree(std::ostream& stream, HWND hWnd, int depth)
+{
+	if (!hWnd || !IsWindow(hWnd) || depth > 10)
+	{
+		return;
+	}
+	char className[128] = {};
+	::GetClassNameA(hWnd, className, sizeof(className));
+
+	wchar_t wideText[512] = {};
+	::GetWindowTextW(hWnd, wideText, sizeof(wideText) / sizeof(wideText[0]));
+	const std::string text = (wideText[0] != 0) ? umbase::UMStringUtil::wstring_to_utf8(wideText) : std::string();
+
+	RECT rect = {};
+	::GetWindowRect(hWnd, &rect);
+	RECT client = {};
+	::GetClientRect(hWnd, &client);
+	const LONG_PTR style = ::GetWindowLongPtrA(hWnd, GWL_STYLE);
+
+	stream << std::string(depth * 2, ' ')
+		<< className
+		<< " id=" << ::GetDlgCtrlID(hWnd)
+		<< " pos=" << rect.left << "," << rect.top
+		<< " size=" << (rect.right - rect.left) << "x" << (rect.bottom - rect.top)
+		<< " client=" << (client.right - client.left) << "x" << (client.bottom - client.top)
+		<< " style=0x" << std::hex << style << std::dec;
+	if (::_stricmp(className, "msctls_trackbar32") == 0)
+	{
+		stream << " range=" << static_cast<int>(::SendMessage(hWnd, TBM_GETRANGEMIN, 0, 0))
+			<< ".." << static_cast<int>(::SendMessage(hWnd, TBM_GETRANGEMAX, 0, 0));
+	}
+	if (::_stricmp(className, "ScrollBar") == 0)
+	{
+		SCROLLINFO info = {};
+		info.cbSize = sizeof(info);
+		info.fMask = SIF_RANGE | SIF_PAGE | SIF_POS;
+		if (::GetScrollInfo(hWnd, SB_CTL, &info))
+		{
+			stream << " range=" << info.nMin << ".." << info.nMax
+				<< " page=" << info.nPage << " pos=" << info.nPos;
+		}
+	}
+	//ウィンドウ自身のスクロールバー(WS_HSCROLL/WS_VSCROLL)の範囲も記録する
+	if (style & WS_HSCROLL)
+	{
+		SCROLLINFO horizontal = {};
+		horizontal.cbSize = sizeof(horizontal);
+		horizontal.fMask = SIF_RANGE | SIF_PAGE | SIF_POS;
+		if (::GetScrollInfo(hWnd, SB_HORZ, &horizontal))
+		{
+			stream << " hscroll=" << horizontal.nMin << ".." << horizontal.nMax;
+		}
+	}
+	if (style & WS_VSCROLL)
+	{
+		SCROLLINFO vertical = {};
+		vertical.cbSize = sizeof(vertical);
+		vertical.fMask = SIF_RANGE | SIF_PAGE | SIF_POS;
+		if (::GetScrollInfo(hWnd, SB_VERT, &vertical))
+		{
+			stream << " vscroll=" << vertical.nMin << ".." << vertical.nMax;
+		}
+	}
+	if (!text.empty())
+	{
+		stream << " text=\"" << text << "\"";
+	}
+	stream << std::endl;
+
+	for (HWND child = ::FindWindowEx(hWnd, NULL, NULL, NULL);
+		child != NULL;
+		child = ::FindWindowEx(hWnd, child, NULL, NULL))
+	{
+		dumpWindowTree(stream, child, depth + 1);
+	}
+}
+
+static BOOL CALLBACK collectProcessWindowProc(HWND hWnd, LPARAM lParam)
+{
+	DWORD processId = 0;
+	::GetWindowThreadProcessId(hWnd, &processId);
+	if (processId != ::GetCurrentProcessId())
+	{
+		return TRUE;
+	}
+	std::vector<unsigned long long>& windows = *reinterpret_cast<std::vector<unsigned long long>*>(lParam);
+	windows.push_back(reinterpret_cast<unsigned long long>(hWnd));
+	return TRUE;
+}
+
+static BOOL CALLBACK dumpWindowTreeProc(HWND hWnd, LPARAM lParam)
+{
+	DWORD processId = 0;
+	::GetWindowThreadProcessId(hWnd, &processId);
+	if (processId != ::GetCurrentProcessId())
+	{
+		return TRUE;
+	}
+	std::ostream& stream = *reinterpret_cast<std::ostream*>(lParam);
+	dumpWindowTree(stream, hWnd, 0);
+	stream << "-----" << std::endl;
+	return TRUE;
+}
+
+//プロセスのトップレベルウィンドウ構成が変化したとき（ウィンドウが開いた/閉じたとき）
+//だけウィンドウツリーを出力する。出力回数は上限を設けてファイルの肥大化を防ぐ。
+static void dumpWindowsOnChange()
+{
+	if (!enableWindowDump)
+	{
+		return;
+	}
+	static std::vector<unsigned long long> lastWindows;
+	static int dumpCount = 0;
+	if (dumpCount >= 30)
+	{
+		return;
+	}
+	std::vector<unsigned long long> windows;
+	::EnumWindows(collectProcessWindowProc, reinterpret_cast<LPARAM>(&windows));
+	std::sort(windows.begin(), windows.end());
+	if (windows == lastWindows)
+	{
+		return;
+	}
+	lastWindows = windows;
+	++dumpCount;
+
+	const std::wstring path = BridgeParameter::instance().base_path + L"mmdbridge_window_dump.txt";
+	std::ofstream stream(path.c_str(), std::ios::out | std::ios::app);
+	if (!stream.is_open())
+	{
+		return;
+	}
+	stream << "=== window set " << dumpCount << " ===" << std::endl;
+	::EnumWindows(dumpWindowTreeProc, reinterpret_cast<LPARAM>(&stream));
+
+	//終了フレーム認識の結果も記録する(認識できていない原因の切り分け用)
+	int detectedFrame = 0;
+	const bool detected = detectMotionEndFrame(detectedFrame);
+	stream << "g_hFrame=" << ((g_hFrame != NULL) ? "found" : "null")
+		<< " detectMotionEndFrame=" << (detected ? detectedFrame : -1) << std::endl;
+	stream.close();
 }
 
 
@@ -1411,7 +1627,7 @@ static INT_PTR CALLBACK DialogProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lP
 				UINT index1 = SendMessage(hCombo1, CB_FINDSTRINGEXACT, -1, (LPARAM)parameter.python_script_name.c_str());
 				SendMessage(hCombo1, CB_SETCURSEL, index1, 0);
 				SendMessage(hCombo2, CB_SETCURSEL, script_call_setting - 1, 0);
-				syncAviFrameRange(FindWindowA("RecWindow", NULL));
+				syncEndFrame(true);
 
 				::SetWindowTextA(hEdit1, to_string(BridgeParameter::instance().start_frame).c_str());
 				::SetWindowTextA(hEdit2, to_string(BridgeParameter::instance().end_frame).c_str());
@@ -1478,7 +1694,8 @@ static INT_PTR CALLBACK DialogProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lP
 static void overrideGLWindow()
 {
 	EnumWindows(enumWindowsProc,0);
-	syncAviFrameRange(FindWindowA("RecWindow", NULL));
+	dumpWindowsOnChange();
+	syncEndFrame(false);
 	setMyMenu();
 	// サブクラス化
 	if(g_hWnd && !originalWndProc){
