@@ -1302,12 +1302,12 @@ static void syncEndFrame(bool forceUpdate)
 	BridgeParameter::mutable_instance().end_frame = endFrame;
 }
 
-
+//mmdbridge_window_dump.txt
 // ---------------------------------------------------------------------------
 // ウィンドウ構成のダンプ（コントロールIDを特定するための診断出力）
 // MMDはコントロールIDを公開していないため、実際の構成をファイルに書き出す。
 // 出力先: <MMDフォルダ>\mmdbridge_window_dump.txt
-static const bool enableWindowDump = true;
+static const bool enableWindowDump = false; //disableWindowDump //disable mmdbridge_window_dump.txt
 
 static void dumpWindowTree(std::ostream& stream, HWND hWnd, int depth)
 {
@@ -1453,7 +1453,7 @@ static void dumpWindowsOnChange()
 		<< " detectMotionEndFrame=" << (detected ? detectedFrame : -1) << std::endl;
 	stream.close();
 }
-
+//mmdbridge_window_dump.txt end
 
 static void GetFrame(HWND hWnd)
 {
@@ -1694,7 +1694,7 @@ static INT_PTR CALLBACK DialogProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lP
 static void overrideGLWindow()
 {
 	EnumWindows(enumWindowsProc,0);
-	dumpWindowsOnChange();
+	dumpWindowsOnChange();//mmdbridge_window_dump.txt
 	syncEndFrame(false);
 	setMyMenu();
 	// サブクラス化
