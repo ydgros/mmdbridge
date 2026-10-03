@@ -13,9 +13,6 @@ export_mode = 2
 # bake the facial expressions (morphs) as face frames
 export_morph = True
 
-# show the export summary (morph and frame counts) when the export ends
-show_summary = True
-
 start_frame = get_start_frame()
 end_frame = get_end_frame()
 
@@ -28,7 +25,4 @@ if (framenumber >= start_frame and framenumber <= end_frame):
 	execute_vmd_export(framenumber)
 
 if (framenumber == end_frame):
-	if (show_summary):
-		messagebox(get_vmd_export_summary())
-	messagebox("vmd export ended at " + str(framenumber))
 	end_vmd_export()
