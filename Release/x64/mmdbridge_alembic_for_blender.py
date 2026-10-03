@@ -20,6 +20,7 @@ export_mode = 0
 def export_mtl(mtlpath, texture_export_dir, export_mode):
 	# cache of textures already written to disk (each one is encoded only once)
 	exported_textures = set()
+	texture_files = {}
 
 	if os.path.isfile(mtlpath):
 		os.remove(mtlpath)
@@ -49,7 +50,7 @@ def export_mtl(mtlpath, texture_export_dir, export_mode):
 			if len(texture) == 0:
 				texture = get_exported_texture(buf, mat)
 				if len(texture) > 0:
-					texture = texture + ".png"
+					texture = texture + ".tga"
 
 			mtlfile.write("Ka "+str(ambient[0])+" "+str(ambient[1])+" "+str(ambient[2])+"\n")
 			if diffuse[0] < 0 or diffuse[1] < 0 or diffuse[2] < 0:
@@ -71,12 +72,15 @@ def export_mtl(mtlpath, texture_export_dir, export_mode):
 			# lum = 1 no specular highlights, lum = 2 light normaly
 			mtlfile.write("lum 1\n")
 			if len(texture) > 0:
-				# get_texture() returns a file name without extension, and a
-				# memory texture is only an identifier, so the texture is
-				# always written out as png and referenced from the mtl
-				texname = os.path.splitext(os.path.basename(texture))[0] + ".png"
-				if texname in exported_textures or export_texture(buf, mat, texture_export_dir + texname):
-					exported_textures.add(texname)
+				texture_stem = os.path.splitext(os.path.basename(texture))[0]
+				if texture_stem not in exported_textures:
+					for extension in (".tga", ".png", ".jpg", ".jpeg", ".bmp"):
+						texname = texture_stem + extension
+						if export_texture(buf, mat, texture_export_dir + texname):
+							texture_files[texture_stem] = texname
+					exported_textures.add(texture_stem)
+				texname = texture_files.get(texture_stem)
+				if texname:
 					mtlfile.write("map_Kd "+texname+"\n")
 					if (diffuse[3] < 1):
 						mtlfile.write("map_d "+texname+"\n")
@@ -94,12 +98,11 @@ framenumber = get_frame_number()
 if (framenumber == start_frame):
 	messagebox("alembic export started")
 	export_mtl(mtlpath, texture_export_dir, export_mode)
-	copy_textures(texture_export_dir)
+	copy_textures(mtlpath.replace("/", "\\"))
 	start_alembic_export("", export_mode, export_normals, export_uvs, is_use_euler_rotation_for_camera, is_use_ogawa)
 
 if (framenumber >= start_frame and framenumber <= end_frame):
 	execute_alembic_export(framenumber)
 
 if (framenumber == end_frame):
-	messagebox("alembic export ended at " + str(framenumber))
 	end_alembic_export()

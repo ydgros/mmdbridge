@@ -396,12 +396,13 @@ namespace
 	{
 		RenderedMaterial* mat = BridgeParameter::instance().render_buffer(at).materials[mpos];
 		std::string path(dst);
-		std::string textureType = path.substr(path.size() - 3, 3);
+		std::string textureType = path.substr(path.find_last_of('.') + 1);
 
 		D3DXIMAGE_FILEFORMAT fileFormat;
 		if (textureType == "bmp" || textureType == "BMP") { fileFormat = D3DXIFF_BMP; }
 		else if (textureType == "png" || textureType == "PNG") { fileFormat = D3DXIFF_PNG; }
 		else if (textureType == "jpg" || textureType == "JPG") { fileFormat = D3DXIFF_JPG; }
+		else if (textureType == "jpeg" || textureType == "JPEG") { fileFormat = D3DXIFF_JPG; }
 		else if (textureType == "tga" || textureType == "TGA") { fileFormat = D3DXIFF_TGA; }
 		else if (textureType == "dds" || textureType == "DDS") { fileFormat = D3DXIFF_DDS; }
 		else if (textureType == "ppm" || textureType == "PPM") { fileFormat = D3DXIFF_PPM; }
@@ -1016,10 +1017,7 @@ HRESULT (WINAPI *original_create_texture)(IDirect3DDevice9*, UINT, UINT, UINT, D
 
 static bool writeTextureToFile(const std::string &texturePath, IDirect3DTexture9 * texture, D3DXIMAGE_FILEFORMAT fileFormat)
 {
-	TextureBuffers::iterator tit = renderData.textureBuffers.find(texture);
-	if(tit != renderData.textureBuffers.end())
-	{
-		if (texture->lpVtbl) {
+	if (texture && texture->lpVtbl) {
 			std::wstring wstr = umbase::UMStringUtil::utf16_to_wstring(umbase::UMStringUtil::utf8_to_utf16(texturePath));
 			HRESULT res = D3DXSaveTextureToFileW(wstr.c_str(), fileFormat,(LPDIRECT3DBASETEXTURE9) texture, NULL);
 			if (res == S_OK)
@@ -1027,7 +1025,6 @@ static bool writeTextureToFile(const std::string &texturePath, IDirect3DTexture9
 				return true;
 			}
 		}
-	}
 	return false;
 }
 
@@ -1876,13 +1873,21 @@ static void getTextureParameter(TextureParameter &param)
 	TextureSamplers::iterator tit1 = renderData.textureSamplers.find(1);
 	TextureSamplers::iterator tit2 = renderData.textureSamplers.find(2);
 
-	param.hasTextureSampler0 = (tit0 != renderData.textureSamplers.end());
-	param.hasTextureSampler1 = (tit1 != renderData.textureSamplers.end());
-	param.hasTextureSampler2 = (tit2 != renderData.textureSamplers.end());
+	param.hasTextureSampler0 = (tit0 != renderData.textureSamplers.end() && tit0->second != NULL);
+	param.hasTextureSampler1 = (tit1 != renderData.textureSamplers.end() && tit1->second != NULL);
+	param.hasTextureSampler2 = (tit2 != renderData.textureSamplers.end() && tit2->second != NULL);
 
-	if (param.hasTextureSampler1) {
-		LPWSTR name = UMGetTextureName(tit1->second);
-		param.texture = tit1->second;
+	TextureSamplers::iterator textureSampler = renderData.textureSamplers.end();
+	if (param.hasTextureSampler0) {
+		textureSampler = tit0;
+	} else if (param.hasTextureSampler1) {
+		textureSampler = tit1;
+	} else if (param.hasTextureSampler2) {
+		textureSampler = tit2;
+	}
+	if (textureSampler != renderData.textureSamplers.end()) {
+		LPWSTR name = UMGetTextureName(textureSampler->second);
+		param.texture = textureSampler->second;
 		param.textureMemoryName = to_string(param.texture);
 		if (name)
 		{
@@ -2161,7 +2166,7 @@ static bool writeMaterialsToMemory(TextureParameter & textureParameter)
 					mat->diffuse.w = 1.0f;
 				}
 			} else	if (textureParameter.hasTextureSampler0 || textureParameter.hasTextureSampler1) {
-				if (colorRop0 != D3DTOP_DISABLE && colorRop1 != D3DTOP_DISABLE)
+				if (colorRop0 != D3DTOP_DISABLE || colorRop1 != D3DTOP_DISABLE)
 				{
 					mat->tex = textureParameter.texture;
 					mat->texture = textureParameter.textureName;

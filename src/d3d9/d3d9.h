@@ -118,6 +118,8 @@ typedef struct RenderedSurface {
 } RenderedSurface;
 
 typedef struct RenderedMaterial {
+	RenderedMaterial() : tex(NULL) {}
+
     UMVec4f   diffuse;        /* Diffuse color RGBA */
     UMVec3f   ambient;        /* Ambient color RGB */
     UMVec3f   specular;       /* Specular 'shininess' */
