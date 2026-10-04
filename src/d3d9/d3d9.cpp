@@ -152,6 +152,70 @@ namespace
 	std::map<int, int> exportedFrames;
 	int syncedEndFrame = 0;	//最後に反映した終了フレーム
 
+	std::wstring export_settings_path()
+	{
+		return BridgeParameter::instance().base_path + _T("mmdbridge.ini");
+	}
+
+	const wchar_t* export_settings_registry_key()
+	{
+		return L"Software\\MMDBridge";
+	}
+
+	void save_selected_python_script(const std::wstring& name);
+
+	void load_selected_python_script()
+	{
+		BridgeParameter& parameter = BridgeParameter::mutable_instance();
+		wchar_t saved_name[MAX_PATH] = {};
+		DWORD saved_name_size = sizeof(saved_name);
+		HKEY key = NULL;
+		if (RegOpenKeyExW(HKEY_CURRENT_USER, export_settings_registry_key(), 0, KEY_QUERY_VALUE, &key) == ERROR_SUCCESS)
+		{
+			DWORD type = 0;
+			if (RegQueryValueExW(key, L"ExportScript", NULL, &type, reinterpret_cast<BYTE*>(saved_name), &saved_name_size) != ERROR_SUCCESS ||
+				type != REG_SZ)
+			{
+				saved_name[0] = L'\0';
+			}
+			RegCloseKey(key);
+		}
+		if (saved_name[0] == L'\0')
+		{
+			const std::wstring settings_path = export_settings_path();
+			GetPrivateProfileStringW(L"Export", L"Script", L"", saved_name, MAX_PATH, settings_path.c_str());
+		}
+		for (size_t i = 0; i < parameter.python_script_name_list.size(); ++i)
+		{
+			if (parameter.python_script_name_list[i] == saved_name)
+			{
+				parameter.python_script_name = parameter.python_script_name_list[i];
+				parameter.python_script_path = parameter.python_script_path_list[i];
+				pythonName = parameter.python_script_name;
+				save_selected_python_script(pythonName);
+				break;
+			}
+		}
+	}
+
+	void save_selected_python_script(const std::wstring& name)
+	{
+		HKEY key = NULL;
+		DWORD disposition = 0;
+		if (RegCreateKeyExW(HKEY_CURRENT_USER, export_settings_registry_key(), 0, NULL, 0, KEY_SET_VALUE, NULL, &key, &disposition) != ERROR_SUCCESS)
+		{
+			OutputDebugStringW(L"MMDBridge: cannot open registry key for export script setting.\n");
+			return;
+		}
+		const DWORD value_size = static_cast<DWORD>((name.size() + 1) * sizeof(wchar_t));
+		const LONG result = RegSetValueExW(key, L"ExportScript", 0, REG_SZ, reinterpret_cast<const BYTE*>(name.c_str()), value_size);
+		RegCloseKey(key);
+		if (result != ERROR_SUCCESS)
+		{
+			OutputDebugStringW(L"MMDBridge: failed to save export script selection.\n");
+		}
+	}
+
 	/// スクリプトのリロード.
 	bool relaod_python_script()
 	{
@@ -200,6 +264,7 @@ namespace
 			} while(FindNextFile(hFind, &find));
 			FindClose(hFind);
 		}
+		load_selected_python_script();
 	}
 
 	// Get a reference to the main module.
@@ -1686,10 +1751,14 @@ static INT_PTR CALLBACK DialogProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lP
 						UINT num1 = (UINT)SendMessage(hCombo1, CB_GETCURSEL, 0, 0);
 						if (num1 < parameter.python_script_name_list.size())
 						{
-							if (pythonName != parameter.python_script_name_list[num1])
+							const std::wstring& selectedName = parameter.python_script_name_list[num1];
+							const std::wstring& selectedPath = parameter.python_script_path_list[num1];
+							mutable_parameter.python_script_name = selectedName;
+							mutable_parameter.python_script_path = selectedPath;
+							save_selected_python_script(selectedName);
+							if (pythonName != selectedName)
 							{
-								pythonName = parameter.python_script_name_list[num1];
-								mutable_parameter.python_script_path = parameter.python_script_path_list[num1];
+								pythonName = selectedName;
 								relaod_python_script();
 							}
 						}
