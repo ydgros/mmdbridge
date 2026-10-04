@@ -85,7 +85,6 @@ end_frame = get_end_frame()
 
 framenumber = get_frame_number()
 if (framenumber == start_frame):
-	messagebox("alembic export started")
 	export_mtl(mtlpath, texture_export_dir, export_mode)
 	copy_textures(mtlpath.replace("/", "\\"))
 	start_alembic_export("", export_mode, export_normals, export_uvs, is_use_euler_rotation_for_camera, is_use_ogawa)

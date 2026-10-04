@@ -18,7 +18,6 @@ end_frame = get_end_frame()
 
 framenumber = get_frame_number()
 if (framenumber == start_frame):
-	messagebox("vmd export started")
 	start_vmd_export("", export_mode, export_morph)
 
 if (framenumber >= start_frame and framenumber <= end_frame):
