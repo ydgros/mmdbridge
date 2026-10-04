@@ -3,6 +3,7 @@ from mmdbridge import *
 import mmdbridge_abc
 from mmdbridge_abc import *
 import os
+import shutil
 
 # settings
 export_normals = True
@@ -18,10 +19,6 @@ export_mode = 0
 
 
 def export_mtl(mtlpath, texture_export_dir, export_mode):
-	# cache of textures already written to disk (each one is encoded only once)
-	exported_textures = set()
-	texture_files = {}
-
 	if os.path.isfile(mtlpath):
 		os.remove(mtlpath)
 
@@ -47,10 +44,6 @@ def export_mtl(mtlpath, texture_export_dir, export_mode):
 			emissive = get_emissive(buf, mat)
 			power = get_power(buf, mat)
 			texture = get_texture(buf, mat)
-			if len(texture) == 0:
-				texture = get_exported_texture(buf, mat)
-				if len(texture) > 0:
-					texture = texture + ".tga"
 
 			mtlfile.write("Ka "+str(ambient[0])+" "+str(ambient[1])+" "+str(ambient[2])+"\n")
 			if diffuse[0] < 0 or diffuse[1] < 0 or diffuse[2] < 0:
@@ -72,15 +65,11 @@ def export_mtl(mtlpath, texture_export_dir, export_mode):
 			# lum = 1 no specular highlights, lum = 2 light normaly
 			mtlfile.write("lum 1\n")
 			if len(texture) > 0:
-				texture_stem = os.path.splitext(os.path.basename(texture))[0]
-				if texture_stem not in exported_textures:
-					for extension in (".tga", ".png", ".jpg", ".jpeg", ".bmp"):
-						texname = texture_stem + extension
-						if export_texture(buf, mat, texture_export_dir + texname):
-							texture_files[texture_stem] = texname
-					exported_textures.add(texture_stem)
-				texname = texture_files.get(texture_stem)
-				if texname:
+				texname = os.path.basename(texture.replace("\\", "/"))
+				if os.path.isfile(texture):
+					destination = os.path.join(texture_export_dir, texname)
+					shutil.copy2(texture, destination)
+					if os.path.isfile(destination):
 					mtlfile.write("map_Kd "+texname+"\n")
 					if (diffuse[3] < 1):
 						mtlfile.write("map_d "+texname+"\n")

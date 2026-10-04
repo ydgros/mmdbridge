@@ -2608,6 +2608,34 @@ D3DXVECTOR3 v_at(0.0f, 0.0f, 0.0f);
 
 std::map<LPDIRECT3DTEXTURE9, std::pair<std::wstring, D3DFORMAT>> dxTextureMap;
 
+static void registerTextureSource(LPDIRECT3DTEXTURE9 texture, const std::wstring& path, D3DFORMAT format)
+{
+	if (texture) {
+		dxTextureMap[texture] = std::pair<std::wstring, D3DFORMAT>(path, format);
+	}
+}
+
+static std::wstring texturePathFromAnsi(LPCSTR path)
+{
+	if (!path) return std::wstring();
+	int length = MultiByteToWideChar(CP_ACP, 0, path, -1, NULL, 0);
+	if (length <= 0) return std::wstring();
+	std::wstring result(length, L'\0');
+	MultiByteToWideChar(CP_ACP, 0, path, -1, &result[0], length);
+	result.resize(length - 1);
+	return result;
+}
+
+static void registerSurfaceTextureSource(LPDIRECT3DSURFACE9 surface, const std::wstring& path, D3DFORMAT format)
+{
+	if (!surface) return;
+	LPDIRECT3DTEXTURE9 texture = NULL;
+	if (SUCCEEDED(surface->lpVtbl->GetContainer(surface, __uuidof(IDirect3DTexture9), (void**)&texture)) && texture) {
+		registerTextureSource(texture, path, format);
+		texture->lpVtbl->Release(texture);
+	}
+}
+
 void UMSetFlag(int flag)
 {
 	showFloatArray = (flag > 0) ;
@@ -2660,12 +2688,13 @@ BOOL UMCopyTexture(LPCWSTR dstDir, LPDIRECT3DTEXTURE9 tex)
 		LPCWSTR srcPath = (*it).second.first.c_str();
 		if (PathFileExists(srcPath)) {
 			WCHAR fileName[MAX_PATH];
-			short size = GetFileTitle(srcPath, NULL, NULL);
-			GetFileTitle(srcPath, fileName, size);
+			lstrcpynW(fileName, PathFindFileNameW(srcPath), MAX_PATH);
 
 			std::wstring dst(std::wstring(dstDir) + std::wstring(fileName));
 
-			CopyFile(srcPath, dst.c_str(), false);
+			if (!CopyFile(srcPath, dst.c_str(), FALSE)) {
+				return false;
+			}
 		}
 
 	} else {
@@ -2679,12 +2708,12 @@ LPWSTR UMGetTextureName(LPDIRECT3DTEXTURE9 tex)
 	std::map<LPDIRECT3DTEXTURE9, std::pair<std::wstring, D3DFORMAT> >::iterator it = dxTextureMap.find(tex);
 
 	static WCHAR dst[MAX_PATH];
+	dst[0] = L'\0';
 
 	if (it != dxTextureMap.end()) {
 		LPCWSTR srcPath = (*it).second.first.c_str();
 		if (PathFileExists(srcPath)) {
-			short size = GetFileTitle(srcPath, NULL, NULL);
-			GetFileTitle(srcPath, dst, size);
+			lstrcpynW(dst, PathFindFileNameW(srcPath), MAX_PATH);
 		}
 	}
 	return dst;
@@ -3898,8 +3927,14 @@ extern "C" {
 		LPCSTR				 pSrcFile,
 		LPDIRECT3DTEXTURE9*       ppTexture)
 	{
-		//::MessageBoxA(NULL, "D3DXCreateTextureFromFileA", "d3dx", MB_OK);
-		return (*original_D3DXCreateTextureFromFileA)(pDevice, pSrcFile, ppTexture);
+		D3DXIMAGE_INFO imageInfo;
+		HRESULT res = (*original_D3DXCreateTextureFromFileA)(pDevice, pSrcFile, ppTexture);
+		if (SUCCEEDED(res)) {
+			if (SUCCEEDED((*original_D3DXGetImageInfoFromFileA)(pSrcFile, &imageInfo))) {
+				registerTextureSource(*ppTexture, texturePathFromAnsi(pSrcFile), imageInfo.Format);
+			}
+		}
+		return res;
 	}
 
 	HRESULT WINAPI D3DXCreateTextureFromFileExA(
@@ -3918,8 +3953,13 @@ extern "C" {
 		PALETTEENTRY*		  pPalette,
 		LPDIRECT3DTEXTURE9*       ppTexture)
 	{
-		//::MessageBoxA(NULL, "D3DXCreateTextureFromFileExA", "d3dx", MB_OK);
-		return (*original_D3DXCreateTextureFromFileExA)(pDevice, pSrcFile, Width, Height, MipLevels, Usage, Format, Pool, Filter, MipFilter, ColorKey, pSrcInfo, pPalette, ppTexture);
+		D3DXIMAGE_INFO imageInfo;
+		D3DXIMAGE_INFO* outputInfo = pSrcInfo ? pSrcInfo : &imageInfo;
+		HRESULT res = (*original_D3DXCreateTextureFromFileExA)(pDevice, pSrcFile, Width, Height, MipLevels, Usage, Format, Pool, Filter, MipFilter, ColorKey, outputInfo, pPalette, ppTexture);
+		if (SUCCEEDED(res)) {
+			registerTextureSource(*ppTexture, texturePathFromAnsi(pSrcFile), outputInfo->Format);
+		}
+		return res;
 	}
 
 	HRESULT WINAPI D3DXCreateTextureFromFileExW(
@@ -3938,7 +3978,9 @@ extern "C" {
 		PALETTEENTRY*		  pPalette,
 		LPDIRECT3DTEXTURE9*       ppTexture)
 	{
-		HRESULT res = (*original_D3DXCreateTextureFromFileExW)(pDevice, pSrcFile, Width, Height, MipLevels, Usage, Format, Pool, Filter, MipFilter, ColorKey, pSrcInfo, pPalette, ppTexture);
+		D3DXIMAGE_INFO imageInfo;
+		D3DXIMAGE_INFO* outputInfo = pSrcInfo ? pSrcInfo : &imageInfo;
+		HRESULT res = (*original_D3DXCreateTextureFromFileExW)(pDevice, pSrcFile, Width, Height, MipLevels, Usage, Format, Pool, Filter, MipFilter, ColorKey, outputInfo, pPalette, ppTexture);
 
 		//{
 		//	D3DXIMAGE_INFO info;
@@ -3953,11 +3995,7 @@ extern "C" {
 		//}
 
 		if (SUCCEEDED(res)) {
-			if (dxTextureMap.find(*ppTexture) != dxTextureMap.end()) {
-				dxTextureMap.erase(*ppTexture);
-
-			}
-			dxTextureMap[*ppTexture] = std::pair<std::wstring, D3DFORMAT>(pSrcFile, pSrcInfo->Format);
+			registerTextureSource(*ppTexture, pSrcFile, outputInfo->Format);
 
 		}
 		return res;
@@ -3999,8 +4037,14 @@ extern "C" {
 		LPCWSTR				pSrcFile,
 		LPDIRECT3DTEXTURE9*       ppTexture)
 	{
-		//::MessageBoxA(NULL, "D3DXCreateTextureFromFileW", "d3dx", MB_OK);
-		return (*original_D3DXCreateTextureFromFileW)(pDevice, pSrcFile, ppTexture);
+		D3DXIMAGE_INFO imageInfo;
+		HRESULT res = (*original_D3DXCreateTextureFromFileW)(pDevice, pSrcFile, ppTexture);
+		if (SUCCEEDED(res)) {
+			if (SUCCEEDED((*original_D3DXGetImageInfoFromFileW)(pSrcFile, &imageInfo))) {
+				registerTextureSource(*ppTexture, pSrcFile, imageInfo.Format);
+			}
+		}
+		return res;
 	}
 
 	HRESULT WINAPI D3DXCreateTextureFromResourceA(
@@ -4836,7 +4880,13 @@ extern "C" {
 		D3DCOLOR				  ColorKey,
 		D3DXIMAGE_INFO*		pSrcInfo)
 	{
-		return (*original_D3DXLoadSurfaceFromFileA)(pDestSurface, pDestPalette, pDestRect, pSrcFile, pSrcRect, Filter, ColorKey, pSrcInfo);
+		D3DXIMAGE_INFO imageInfo;
+		D3DXIMAGE_INFO* outputInfo = pSrcInfo ? pSrcInfo : &imageInfo;
+		HRESULT res = (*original_D3DXLoadSurfaceFromFileA)(pDestSurface, pDestPalette, pDestRect, pSrcFile, pSrcRect, Filter, ColorKey, outputInfo);
+		if (SUCCEEDED(res)) {
+			registerSurfaceTextureSource(pDestSurface, texturePathFromAnsi(pSrcFile), outputInfo->Format);
+		}
+		return res;
 	}
 
 	HRESULT WINAPI D3DXLoadSurfaceFromFileInMemory(
@@ -4863,7 +4913,13 @@ extern "C" {
 		D3DCOLOR				  ColorKey,
 		D3DXIMAGE_INFO*		pSrcInfo)
 	{
-		return (*original_D3DXLoadSurfaceFromFileW)(pDestSurface, pDestPalette, pDestRect, pSrcFile, pSrcRect, Filter, ColorKey, pSrcInfo);
+		D3DXIMAGE_INFO imageInfo;
+		D3DXIMAGE_INFO* outputInfo = pSrcInfo ? pSrcInfo : &imageInfo;
+		HRESULT res = (*original_D3DXLoadSurfaceFromFileW)(pDestSurface, pDestPalette, pDestRect, pSrcFile, pSrcRect, Filter, ColorKey, outputInfo);
+		if (SUCCEEDED(res)) {
+			registerSurfaceTextureSource(pDestSurface, pSrcFile, outputInfo->Format);
+		}
+		return res;
 	}
 
 	HRESULT WINAPI D3DXLoadSurfaceFromMemory(

@@ -36,6 +36,7 @@ namespace py = pybind11;
 #endif
 #include "UMStringUtil.h"
 #include "UMPath.h"
+#include <Pmx.h>
 
 #ifdef _WIN64
 #define _LONG_PTR LONG_PTR
@@ -333,9 +334,52 @@ namespace
 		return power;
 	}
 
+	std::string get_object_filename(int at);
+
 	std::string get_texture(int at, int mpos)
 	{
 		RenderedMaterial* mat = BridgeParameter::instance().render_buffer(at).materials[mpos];
+		const RenderedBuffer& buffer = BridgeParameter::instance().render_buffer(at);
+		if (!buffer.isAccessory) {
+			const std::string modelPath = get_object_filename(buffer.order);
+			if (modelPath.size() >= 4 && _stricmp(modelPath.c_str() + modelPath.size() - 4, ".pmx") == 0) {
+				static std::map<std::string, std::vector<std::string> > texturePathsByModel;
+				std::map<std::string, std::vector<std::string> >::iterator cached = texturePathsByModel.find(modelPath);
+				if (cached == texturePathsByModel.end()) {
+					std::wstring wideModelPath = umbase::UMStringUtil::utf16_to_wstring(
+						umbase::UMStringUtil::utf8_to_utf16(modelPath));
+					std::ifstream stream(wideModelPath.c_str(), std::ios::binary);
+					if (stream) {
+						pmx::PmxModel model;
+						model.Read(&stream);
+						std::vector<std::string> texturePaths;
+						texturePaths.reserve(model.materials.size());
+						std::wstring modelDirectory = wideModelPath;
+						PathRemoveFileSpecW(&modelDirectory[0]);
+						for (std::vector<pmx::PmxMaterial>::const_iterator it = model.materials.begin(); it != model.materials.end(); ++it) {
+							if (it->diffuse_texture_index < 0 ||
+								it->diffuse_texture_index >= static_cast<int>(model.textures.size())) {
+								texturePaths.push_back("");
+								continue;
+							}
+							std::wstring texturePath = model.textures[it->diffuse_texture_index];
+							if (PathIsRelativeW(texturePath.c_str())) {
+								wchar_t fullPath[MAX_PATH];
+								PathCombineW(fullPath, modelDirectory.c_str(), texturePath.c_str());
+								texturePath = fullPath;
+							}
+							texturePaths.push_back(umbase::UMStringUtil::wstring_to_utf8(texturePath));
+						}
+						cached = texturePathsByModel.insert(std::make_pair(modelPath, texturePaths)).first;
+					}
+				}
+				if (cached != texturePathsByModel.end() &&
+					mpos >= 0 && mpos < static_cast<int>(cached->second.size()) &&
+					!cached->second[mpos].empty()) {
+					return cached->second[mpos];
+				}
+			}
+		}
 		return mat->texture;
 	}
 
@@ -1878,12 +1922,15 @@ static void getTextureParameter(TextureParameter &param)
 	param.hasTextureSampler2 = (tit2 != renderData.textureSamplers.end() && tit2->second != NULL);
 
 	TextureSamplers::iterator textureSampler = renderData.textureSamplers.end();
-	if (param.hasTextureSampler0) {
-		textureSampler = tit0;
-	} else if (param.hasTextureSampler1) {
-		textureSampler = tit1;
-	} else if (param.hasTextureSampler2) {
-		textureSampler = tit2;
+	TextureSamplers::iterator samplers[] = { tit1, tit0, tit2 };
+	for (int i = 0; i < 3; ++i) {
+		if (samplers[i] != renderData.textureSamplers.end() && samplers[i]->second) {
+			LPWSTR sourceName = UMGetTextureName(samplers[i]->second);
+			if (sourceName && sourceName[0] != L'\0') {
+				textureSampler = samplers[i];
+				break;
+			}
+		}
 	}
 	if (textureSampler != renderData.textureSamplers.end()) {
 		LPWSTR name = UMGetTextureName(textureSampler->second);
@@ -2208,6 +2255,14 @@ static bool writeMaterialsToMemory(TextureParameter & textureParameter)
 		renderedMaterials[currentObject][currentMaterial] = materialMap[currentMaterial];
 	}
 
+	RenderedMaterial* currentMat = renderedMaterials[currentObject][currentMaterial];
+	if (textureParameter.texture && renderData.texcount > 0)
+	{
+		currentMat->tex = textureParameter.texture;
+		currentMat->texture = textureParameter.textureName;
+		currentMat->memoryTexture = textureParameter.textureMemoryName;
+	}
+
 	if (renderedBuffers[pStreamData].materials.size() > 0) 
 	{
 		return true;
@@ -2460,10 +2515,8 @@ static HRESULT WINAPI setTexture(
 	DWORD sampler,	
 	IDirect3DBaseTexture9 * pTexture)
 {
-	if (presentCount == 0) {
 		IDirect3DTexture9* texture = reinterpret_cast<IDirect3DTexture9*>(pTexture);
 		renderData.textureSamplers[sampler] = texture;
-	}
 
 	HRESULT res = (*original_set_texture)(device, sampler, pTexture);
 
