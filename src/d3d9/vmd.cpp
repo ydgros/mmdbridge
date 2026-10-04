@@ -231,6 +231,19 @@ static bool end_vmd_export()
 	const BridgeParameter& parameter = BridgeParameter::instance();
 	const int pmd_num = ExpGetPmdNum();
 	oguna::EncodingConverter converter;
+	static unsigned int output_sequence = 0;
+	SYSTEMTIME local_time;
+	GetLocalTime(&local_time);
+	wchar_t timestamp[32];
+	swprintf_s(
+		timestamp,
+		L"%04u%02u%02u_%02u%02u%02u",
+		local_time.wYear,
+		local_time.wMonth,
+		local_time.wDay,
+		local_time.wHour,
+		local_time.wMinute,
+		local_time.wSecond);
 
 	for (int i = 0; i < pmd_num; ++i)
 	{
@@ -251,15 +264,22 @@ static bool end_vmd_export()
 		{
 			std::string dst;
 			converter.Cp932ToUtf8(filename, strnlen(filename, 4096), &dst);
-			const umstring umstr = umbase::UMStringUtil::utf8_to_utf16(dst);
-			umstring filename = umbase::UMPath::get_file_name(umstr);
-			if (filename.size() < 4)
+			const umstring source_path = umbase::UMStringUtil::utf8_to_utf16(dst);
+			umstring output_name = umbase::UMPath::get_file_name(source_path);
+			const size_t extension = output_name.find_last_of(static_cast<char16_t>('.'));
+			if (extension != umstring::npos)
 			{
-				continue;
+				output_name.erase(extension);
 			}
-			const umstring extension = umbase::UMStringUtil::utf8_to_utf16(".vmd");
-			filename.replace(filename.size() - 4, 4, extension);
-			auto output_filepath = umbase::UMStringUtil::utf16_to_wstring(umbase::UMStringUtil::utf8_to_utf16(archive.output_path) + filename);
+			++output_sequence;
+			wchar_t sequence[16];
+			swprintf_s(sequence, L"%03u", output_sequence);
+			const std::wstring generated_name =
+				umbase::UMStringUtil::utf16_to_wstring(output_name) +
+				L"_" + timestamp + L"_" + sequence + L".vmd";
+			const umstring generated_path = umbase::UMStringUtil::utf8_to_utf16(archive.output_path) +
+				umbase::UMStringUtil::wstring_to_utf16(generated_name);
+			auto output_filepath = umbase::UMStringUtil::utf16_to_wstring(generated_path);
 			file_data.vmd->SaveToFile(output_filepath);
 		}
 	}
