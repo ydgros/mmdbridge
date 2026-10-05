@@ -170,6 +170,34 @@ def ensureMaterialAssets(mtlDict, assetsPath, assetRegistry):
     return materialsByKey
 
 
+def ensureMaterialInstances(materialsByKey, assetsPath):
+    assetTools = unreal.AssetToolsHelpers.get_asset_tools()
+    instancesByKey = {}
+
+    for materialKey, parentMaterial in materialsByKey.items():
+        instanceName = "MI_" + materialKey
+        instancePath = assetsPath.rstrip("/") + "/" + instanceName
+        instance = unreal.EditorAssetLibrary.load_asset(instancePath)
+        if instance is None:
+            instance = assetTools.create_asset(
+                instanceName,
+                assetsPath,
+                unreal.MaterialInstanceConstant,
+                unreal.MaterialInstanceConstantFactoryNew()
+            )
+        if instance is None or instance.get_class().get_name() != "MaterialInstanceConstant":
+            raise RuntimeError(
+                "Could not create or load material instance '{}' in '{}'.".format(
+                    instanceName, assetsPath
+                )
+            )
+
+        instance.set_editor_property("parent", parentMaterial)
+        unreal.EditorAssetLibrary.save_loaded_asset(instance)
+        instancesByKey[materialKey] = instance
+    return instancesByKey
+
+
 def assignTexAndMat(mtlDict, importedTexDict, materialsByKey):
     ME = unreal.MaterialEditingLibrary
     for materialKey, mtlData in mtlDict.items():
