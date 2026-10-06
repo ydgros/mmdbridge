@@ -369,8 +369,9 @@ def main():
     materialsByKey = ensureMaterialAssets(mtlDict, assetsPath, assetRegistry)
 
     assignTexAndMat(mtlDict, importedTexDict, materialsByKey)
+    materialInstancesByKey = ensureMaterialInstances(materialsByKey, assetsPath)
     for mesh in selectedMeshes:
-        assignMaterialsToMesh(mesh, materialsByKey, mtlDict)
+        assignMaterialsToMesh(mesh, materialInstancesByKey, mtlDict)
 
 
 main()
